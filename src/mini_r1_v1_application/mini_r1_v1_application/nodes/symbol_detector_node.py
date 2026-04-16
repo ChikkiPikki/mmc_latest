@@ -27,7 +27,6 @@ class SymbolDetectorNode(Node):
         super().__init__('symbol_detector_node')
 
         # Parameters
-        self.declare_parameter('use_sim_time', False)
         self.declare_parameter('max_detection_dist_m', 3.5)
         self.declare_parameter('min_depth', 0.1)
         self.declare_parameter('dedup_radius_m', 0.5)

@@ -13,7 +13,6 @@ class MissionManagerNode(Node):
         super().__init__('mission_manager_node')
 
         # Parameters
-        self.declare_parameter('use_sim_time', False)
         self.declare_parameter('coverage_target_pct', 90.0)
         self.declare_parameter('max_mission_time_s', 300.0)
         self.declare_parameter('report_interval_s', 5.0)

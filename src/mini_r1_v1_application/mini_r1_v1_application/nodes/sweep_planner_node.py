@@ -16,7 +16,6 @@ class SweepPlannerNode(Node):
         super().__init__('sweep_planner_node')
 
         # Parameters
-        self.declare_parameter('use_sim_time', False)
         self.declare_parameter('arena_width_m', 10.0)
         self.declare_parameter('arena_height_m', 10.0)
         self.declare_parameter('arena_origin_x', -5.0)

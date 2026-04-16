@@ -19,7 +19,6 @@ class PursuitControllerNode(Node):
         super().__init__('pursuit_controller_node')
 
         # Parameters
-        self.declare_parameter('use_sim_time', False)
         self.declare_parameter('lookahead_m', 0.40)
         self.declare_parameter('max_linear_vel', 0.56)
         self.declare_parameter('max_angular_vel', 0.50)

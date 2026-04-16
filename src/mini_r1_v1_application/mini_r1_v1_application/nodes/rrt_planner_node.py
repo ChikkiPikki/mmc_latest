@@ -28,7 +28,6 @@ class RRTPlannerNode(Node):
         super().__init__('rrt_planner_node')
 
         # Parameters
-        self.declare_parameter('use_sim_time', False)
         self.declare_parameter('max_iterations', 1500)
         self.declare_parameter('step_size_m', 0.20)
         self.declare_parameter('goal_bias', 0.20)

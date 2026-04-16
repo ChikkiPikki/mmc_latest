@@ -24,7 +24,6 @@ class ArucoLocalizerNode(Node):
         super().__init__('aruco_localizer_node')
 
         # Parameters
-        self.declare_parameter('use_sim_time', False)
         self.declare_parameter('aruco_dict', 'DICT_4X4_50')
         self.declare_parameter('marker_length_m', 0.4)
         self.declare_parameter('max_detection_dist_m', 3.5)
