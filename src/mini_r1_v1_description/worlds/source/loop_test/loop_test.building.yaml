@@ -1,0 +1,65 @@
+coordinate_system: reference_image
+crowd_sim:
+  agent_groups:
+    - {agents_name: [], agents_number: 0, group_id: 0, profile_selector: external_agent, state_selector: external_static, x: 0, y: 0}
+  agent_profiles:
+    - {ORCA_tau: 1, ORCA_tauObst: 0.40000000000000002, class: 1, max_accel: 0, max_angle_vel: 0, max_neighbors: 10, max_speed: 0, name: external_agent, neighbor_dist: 5, obstacle_set: 1, pref_speed: 0, r: 0.25}
+  enable: 0
+  goal_sets: []
+  model_types: []
+  obstacle_set: {class: 1, file_name: floor_0_navmesh.nav, type: nav_mesh}
+  states:
+    - {final: 1, goal_set: -1, name: external_static, navmesh_file_name: ""}
+  transitions: []
+  update_time_step: 0.10000000000000001
+graphs:
+  {}
+levels:
+  floor_0:
+    drawing:
+      filename: map.png
+    elevation: 0
+    floors:
+      - parameters: {ceiling_scale: [3, 1], ceiling_texture: [1, blue_linoleum], indoor: [2, 0], texture_name: [1, blue_linoleum], texture_rotation: [3, 0], texture_scale: [3, 1]}
+        vertices: [3, 11, 10, 4]
+    layers:
+      {}
+    measurements:
+      - [0, 1, {distance: [3, 1]}]
+    models:
+      - {dispensable: false, model_name: OpenRobotics/Sofa, name: OpenRobotics/Sofa, static: true, x: 216.816, y: 2025.9649999999999, yaw: 1.5708, z: 0}
+      - {dispensable: false, model_name: OpenRobotics/Cafe table, name: OpenRobotics/Cafe table, static: true, x: 774.18799999999999, y: 1163.7909999999999, yaw: 1.5708, z: 0}
+      - {dispensable: false, model_name: OpenRobotics/MaleVisitorOnPhone, name: OpenRobotics/MaleVisitorOnPhone, static: true, x: 1071.7750000000001, y: 1330.5309999999999, yaw: 1.5708, z: 0}
+    vertices:
+      - [309.97300000000001, 1269.278, 0, ""]
+      - [413.24400000000003, 1269.278, 0, ""]
+      - [104.851, 1370.5640000000001, 0, ""]
+      - [104.76000000000001, 1065.925, 0, ""]
+      - [1546.0699999999999, 1064.902, 0, ""]
+      - [1543.932, 1777.1949999999999, 0, ""]
+      - [310.20699999999999, 1777.3230000000001, 0, ""]
+      - [413.21699999999998, 1574.7539999999999, 0, ""]
+      - [1132.886, 1573.3140000000001, 0, ""]
+      - [1237.559, 1372.461, 0, ""]
+      - [1545.7819999999999, 2087.1149999999998, 0, ""]
+      - [103.809, 2087.9499999999998, 0, ""]
+      - [1341.095, 1937.403, 0, goal]
+      - [207.482, 1269.2339999999999, 0, spawn_0]
+      - [1484.0070000000001, 1602.511, 0, aruco_1_45]
+      - [667.11400000000003, 1742.184, 0, aruco_2_60]
+      - [1517.4749999999999, 1196.6800000000001, 0, direction_1_right_180]
+      - [156.851, 1428.279, 0, direction_2_right_270]
+      - [206.31899999999999, 1677.6410000000001, 0, direction_3_right_0]
+      - [1244.4010000000001, 1473.021, 0, direction_3_right_180]
+    walls:
+      - [3, 2, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [2, 11, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [11, 10, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [10, 5, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [5, 4, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [4, 3, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [2, 9, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [8, 7, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [6, 5, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+lifts: {}
+name: loop_test

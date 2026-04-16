@@ -1,0 +1,18 @@
+symbol_detector_node:
+  ros__parameters:
+    max_detection_dist_m: 3.5
+    min_depth: 0.1
+    dedup_radius_m: 0.5
+    process_every_n: 3
+    sync_slop_s: 0.1
+    sam_imgsz: 480
+    sam_conf: 0.3
+
+    # HSV orange arrow filter (from legacy)
+    sign_arrow_h_low: 0
+    sign_arrow_h_high: 25
+    sign_arrow_s_min: 150
+    sign_arrow_v_min: 100
+    sign_min_mask_area: 300
+    sign_arrow_ratio_min: 0.30
+    sign_curved_max_convexity: 0.65

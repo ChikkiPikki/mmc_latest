@@ -1,0 +1,10 @@
+rrt_planner_node:
+  ros__parameters:
+    max_iterations: 1500
+    step_size_m: 0.20
+    goal_bias: 0.20
+    obstacle_threshold: 65
+    robot_radius_m: 0.18
+    path_simplify: true
+    timeout_s: 0.5
+    use_rrt_star: false

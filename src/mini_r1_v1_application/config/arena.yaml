@@ -1,0 +1,6 @@
+# Arena geometry — shared across nodes
+arena:
+  width_m: 10.0
+  height_m: 10.0
+  origin_x: -5.0
+  origin_y: -5.0

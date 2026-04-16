@@ -1,0 +1,6 @@
+mission_manager_node:
+  ros__parameters:
+    coverage_target_pct: 90.0
+    max_mission_time_s: 300.0
+    report_interval_s: 5.0
+    node_timeout_s: 3.0

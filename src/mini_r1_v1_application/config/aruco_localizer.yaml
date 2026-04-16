@@ -1,0 +1,11 @@
+aruco_localizer_node:
+  ros__parameters:
+    aruco_dict: "DICT_4X4_50"
+    marker_length_m: 0.4
+    max_detection_dist_m: 3.5
+    min_marker_area_px: 200
+    known_markers_file: ""
+    process_every_n: 3
+    sync_slop_s: 0.1
+    min_depth: 0.1
+    max_depth: 10.0

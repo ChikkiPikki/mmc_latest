@@ -1,0 +1,9 @@
+coverage_tracker_node:
+  ros__parameters:
+    arena_width_m: 10.0
+    arena_height_m: 10.0
+    arena_origin_x: -5.0
+    arena_origin_y: -5.0
+    cell_size_m: 0.15
+    visit_radius_m: 0.20
+    publish_rate_hz: 2.0

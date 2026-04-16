@@ -1,0 +1,95 @@
+coordinate_system: reference_image
+crowd_sim:
+  agent_groups:
+    - {agents_name: [], agents_number: 0, group_id: 0, profile_selector: external_agent, state_selector: external_static, x: 0, y: 0}
+  agent_profiles:
+    - {ORCA_tau: 1, ORCA_tauObst: 0.40000000000000002, class: 1, max_accel: 0, max_angle_vel: 0, max_neighbors: 10, max_speed: 0, name: external_agent, neighbor_dist: 5, obstacle_set: 1, pref_speed: 0, r: 0.25}
+  enable: 0
+  goal_sets: []
+  model_types: []
+  obstacle_set: {class: 1, file_name: floor_0_navmesh.nav, type: nav_mesh}
+  states:
+    - {final: 1, goal_set: -1, name: external_static, navmesh_file_name: ""}
+  transitions: []
+  update_time_step: 0.10000000000000001
+graphs:
+  {}
+levels:
+  floor_0:
+    elevation: 0
+    floors:
+      - parameters: {ceiling_scale: [3, 1], ceiling_texture: [1, blue_linoleum], indoor: [2, 0], texture_name: [1, blue_linoleum], texture_rotation: [3, 0], texture_scale: [3, 1]}
+        vertices: [25, 28, 27, 26, 2, 5, 10, 32, 33, 23, 24]
+    layers:
+      {}
+    measurements:
+      - [0, 1, {distance: [3, 1]}]
+    models:
+      - {dispensable: false, model_name: OpenRobotics/Fridge, name: OpenRobotics/Fridge, static: true, x: 1509.4749999999999, y: 745.68299999999999, yaw: 1.5708, z: 0}
+      - {dispensable: false, model_name: OpenRobotics/Sofa, name: OpenRobotics/Sofa, static: true, x: 669.87300000000005, y: 1602.924, yaw: 1.5708, z: 0}
+      - {dispensable: false, model_name: OpenRobotics/Sofa, name: OpenRobotics/Sofa, static: true, x: 1423.046, y: 1608.2149999999999, yaw: 1.5708, z: 0}
+      - {dispensable: false, model_name: OpenRobotics/TrashBin, name: OpenRobotics/TrashBin, static: true, x: 521.70799999999997, y: 306.47899999999998, yaw: 1.5708, z: 0}
+      - {dispensable: false, model_name: OpenRobotics/MaleVisitorOnPhone, name: OpenRobotics/MaleVisitorOnPhone, static: true, x: 470.55599999999998, y: 1110.8040000000001, yaw: 1.5708, z: 0}
+    vertices:
+      - [104.441, 45.399999999999999, 0, ""]
+      - [207.53800000000001, 45.258000000000003, 0, ""]
+      - [104.04000000000001, 145.892, 0, ""]
+      - [1547.414, 145.892, 0, ""]
+      - [1547.414, 453.58100000000002, 0, ""]
+      - [104.04000000000001, 458.767, 0, ""]
+      - [1236.268, 458.767, 0, ""]
+      - [1236.268, 756.08399999999995, 0, ""]
+      - [104.04000000000001, 756.08399999999995, 0, ""]
+      - [104.04000000000001, 961.78700000000003, 0, ""]
+      - [104.553, 1234.4400000000001, 0, ""]
+      - [1551.825, 963.30799999999999, 0, ""]
+      - [311.25999999999999, 963.30799999999999, 0, ""]
+      - [150.12700000000001, 294.03699999999998, 0, spawn_0]
+      - [410.52300000000002, 1474.3320000000001, 0, goal]
+      - [1484.8119999999999, 288.834, 0, direction_1_right_180]
+      - [1483.5, 924.38599999999997, 0, direction_2_right_90]
+      - [837.93100000000004, 411.834, 0, aruco_2_0]
+      - [133.81200000000001, 853.19399999999996, 0, direction_3_left_0]
+      - [178.285, 1178.204, 0, aruco_3_45]
+      - [881.85500000000002, 1168.2070000000001, 0, aruco_4_60]
+      - [1382.4770000000001, 1220.164, 0, ""]
+      - [1384.8430000000001, 1369.336, 0, ""]
+      - [309.983, 1369.336, 0, ""]
+      - [309.983, 1672.845, 0, ""]
+      - [1548.423, 1672.845, 0, ""]
+      - [1340.635, 155.16300000000001, 0, ""]
+      - [1340.635, -280.65100000000001, 0, ""]
+      - [1554.0219999999999, -280.65100000000001, 0, ""]
+      - [1281.9359999999999, 1050.8320000000001, 0, direction_5_left_0]
+      - [1151.7860000000001, 1618.0920000000001, 0, aruco_1_80]
+      - [1552.537, 1369.722, 0, ""]
+      - [1233.0050000000001, 1229.7639999999999, 0, ""]
+      - [1232.2429999999999, 1361.6320000000001, 0, ""]
+      - [959.12800000000004, 986.15700000000004, 0, direction_6_forward_180]
+    walls:
+      - [3, 4, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [2, 5, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [5, 6, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [6, 7, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [7, 8, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [8, 9, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [9, 10, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [11, 12, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [11, 4, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [21, 22, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [23, 24, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [24, 25, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [26, 27, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [27, 28, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [28, 3, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [26, 2, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [22, 31, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [11, 31, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [31, 25, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [10, 32, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [32, 33, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [23, 33, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+    x_meters: 15.519350537277498
+    y_meters: 21.940481822076062
+lifts: {}
+name: simple

@@ -1,0 +1,12 @@
+scipy
+Pillow
+setuptools
+numpy<2
+torch
+torchvision
+ultralytics
+opencv-python-headless>=4.8
+openai
+python-dotenv
+fastapi
+uvicorn[standard]
