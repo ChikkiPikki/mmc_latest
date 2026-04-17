@@ -4,18 +4,25 @@ Detects three logo colors (#3b12b6, #e77f33, #2b9e27) and AprilTag centers in
 the RGB image, deprojects pixel + depth to 3D in the camera frame, transforms
 into `map`, and publishes plane markers.
 
+Logo orientation:
+  Each tile logo has orange arcs at the top and green arcs at the bottom.
+  Orientation (yaw) = atan2(orange_y - green_y, orange_x - green_x) in map frame.
+  Published once per unique logo location on /logo/pose (PoseStamped, latched).
+
 Diagnostics:
   /logo/depth_viz  — MONO8 normalized depth (view in RViz Image display)
   /logo/mask_viz   — BGR overlay of HSV masks on RGB (debug color thresholds)
-  /logo/markers    — MarkerArray (thin CUBE planes + text labels)
+  /logo/markers    — MarkerArray (thin CUBE planes + text labels + orientation arrows)
 
 Log lines (throttled to ~3s):
   [DEPTH] shape, min, max, % in valid range
   [HSV]   pixel count per color
   [TF]    camera → map translation + rotation euler
+  [LOGO]  orientation locked: center, yaw, orange/green positions
 """
 
 import json
+import math
 import numpy as np
 import cv2
 import rclpy
@@ -26,6 +33,7 @@ import message_filters
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import String
+from geometry_msgs.msg import PoseStamped
 from visualization_msgs.msg import Marker, MarkerArray
 from apriltag_msgs.msg import AprilTagDetectionArray
 
@@ -68,16 +76,18 @@ class LogoDetectorNode(Node):
         self.declare_parameter("plane_thickness_m", 0.01)
         self.declare_parameter("logo_plane_size_m", 0.20)
         self.declare_parameter("depth_is_optical", True)
+        self.declare_parameter("logo_cluster_radius_m", 0.7)
 
-        self.map_frame       = self.get_parameter("map_frame").value
-        self.min_cluster_px  = int(self.get_parameter("min_cluster_px").value)
-        self.min_depth       = float(self.get_parameter("min_depth").value)
-        self.max_depth       = float(self.get_parameter("max_depth").value)
-        self.dedup_radius_sq = float(self.get_parameter("dedup_radius_m").value) ** 2
-        self.tag_size        = float(self.get_parameter("apriltag_size_m").value)
-        self.plane_thickness = float(self.get_parameter("plane_thickness_m").value)
-        self.logo_size       = float(self.get_parameter("logo_plane_size_m").value)
-        self.depth_is_optical = bool(self.get_parameter("depth_is_optical").value)
+        self.map_frame            = self.get_parameter("map_frame").value
+        self.min_cluster_px       = int(self.get_parameter("min_cluster_px").value)
+        self.min_depth            = float(self.get_parameter("min_depth").value)
+        self.max_depth            = float(self.get_parameter("max_depth").value)
+        self.dedup_radius_sq      = float(self.get_parameter("dedup_radius_m").value) ** 2
+        self.tag_size             = float(self.get_parameter("apriltag_size_m").value)
+        self.plane_thickness      = float(self.get_parameter("plane_thickness_m").value)
+        self.logo_size            = float(self.get_parameter("logo_plane_size_m").value)
+        self.depth_is_optical     = bool(self.get_parameter("depth_is_optical").value)
+        self._logo_cluster_r_sq   = float(self.get_parameter("logo_cluster_radius_m").value) ** 2
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -104,13 +114,16 @@ class LogoDetectorNode(Node):
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
-        self.marker_pub    = self.create_publisher(MarkerArray, "/logo/markers",          latched)
-        self.tag_pos_pub   = self.create_publisher(String,      "/apriltag/map_positions", latched)
-        self.depth_viz_pub = self.create_publisher(Image,       "/logo/depth_viz",        10)
-        self.mask_viz_pub  = self.create_publisher(Image,       "/logo/mask_viz",         10)
+        self.marker_pub    = self.create_publisher(MarkerArray,  "/logo/markers",          latched)
+        self.tag_pos_pub   = self.create_publisher(String,       "/apriltag/map_positions", latched)
+        self.logo_pose_pub = self.create_publisher(PoseStamped,  "/logo/pose",             latched)
+        self.depth_viz_pub = self.create_publisher(Image,        "/logo/depth_viz",        10)
+        self.mask_viz_pub  = self.create_publisher(Image,        "/logo/mask_viz",         10)
 
         self._locked_logos = []   # (name, x, y, z, rviz_rgb)
         self._locked_tags  = {}   # tag_id -> (x, y, z)
+        # Each entry: (cx, cy, cz, yaw) — one per unique logo location, locked once.
+        self._locked_logo_poses = []
 
         self._frame_count = 0
 
@@ -172,8 +185,12 @@ class LogoDetectorNode(Node):
             return None
         return float(np.median(valid))
 
-    def _dedup_logo(self, x, y, z):
-        for _, lx, ly, lz, _ in self._locked_logos:
+    def _dedup_logo(self, name, x, y, z):
+        # Dedup only within the same color — cross-color blobs belong to the same logo
+        # and must all be locked independently so orientation can be computed.
+        for lname, lx, ly, lz, _ in self._locked_logos:
+            if lname != name:
+                continue
             if (lx-x)**2 + (ly-y)**2 + (lz-z)**2 < self.dedup_radius_sq:
                 return True
         return False
@@ -314,7 +331,7 @@ class LogoDetectorNode(Node):
                     f"p_cam=({p_cam[0]:.2f},{p_cam[1]:.2f},{p_cam[2]:.2f}) "
                     f"p_map=({x:.2f},{y:.2f},{z:.2f}) area={area}"
                 )
-                if self._dedup_logo(x, y, z):
+                if self._dedup_logo(name, x, y, z):
                     continue
                 self._locked_logos.append((name, x, y, z, rviz_rgb))
                 new_detections += 1
@@ -322,8 +339,72 @@ class LogoDetectorNode(Node):
         self._publish_depth_viz(depth, msg_depth.header.stamp)
         self._publish_mask_viz(rgb, hsv, msg_rgb.header.stamp)
 
+        if new_detections:
+            self._try_lock_logo()
+
         if new_detections or self._locked_tags:
             self._publish_markers()
+
+    # ──────────────────────────────────────────────────────────────
+    def _try_lock_logo(self):
+        """Group spatially correlated orange+green blobs into a logo instance.
+
+        The logo's orientation is the vector from the green centroid to the orange
+        centroid projected onto the XY (ground) plane: yaw = atan2(oy-gy, ox-gx).
+        Each unique logo location is locked exactly once.
+        """
+        by_color = {}
+        for lname, x, y, z, _ in self._locked_logos:
+            by_color.setdefault(lname, []).append((x, y, z))
+
+        oranges = by_color.get('orange', [])
+        greens  = by_color.get('green',  [])
+        if not oranges or not greens:
+            return
+
+        for ox, oy, oz in oranges:
+            for gx, gy, gz in greens:
+                d_sq = (ox - gx) ** 2 + (oy - gy) ** 2
+                if d_sq > self._logo_cluster_r_sq:
+                    continue
+
+                # Candidate logo center (midpoint of orange/green, or centroid with purple)
+                cx, cy, cz = (ox + gx) / 2.0, (oy + gy) / 2.0, (oz + gz) / 2.0
+                for px, py, pz in by_color.get('purple', []):
+                    if (px - cx) ** 2 + (py - cy) ** 2 < self._logo_cluster_r_sq:
+                        cx = (ox + gx + px) / 3.0
+                        cy = (oy + gy + py) / 3.0
+                        cz = (oz + gz + pz) / 3.0
+                        break
+
+                # Skip if we already locked a logo at this location
+                already = any(
+                    (lx - cx) ** 2 + (ly - cy) ** 2 < self._logo_cluster_r_sq
+                    for lx, ly, _lz, _yaw in self._locked_logo_poses
+                )
+                if already:
+                    continue
+
+                yaw = math.atan2(oy - gy, ox - gx)
+                self._locked_logo_poses.append((cx, cy, cz, yaw))
+                self._publish_logo_pose(cx, cy, cz, yaw)
+                self.get_logger().info(
+                    f'[LOGO] Orientation locked #{len(self._locked_logo_poses)}: '
+                    f'center=({cx:.2f},{cy:.2f},{cz:.2f}) '
+                    f'yaw={math.degrees(yaw):.1f}° '
+                    f'orange=({ox:.2f},{oy:.2f}) green=({gx:.2f},{gy:.2f})'
+                )
+
+    def _publish_logo_pose(self, x, y, z, yaw):
+        ps = PoseStamped()
+        ps.header.frame_id = self.map_frame
+        ps.header.stamp = self.get_clock().now().to_msg()
+        ps.pose.position.x = x
+        ps.pose.position.y = y
+        ps.pose.position.z = z
+        ps.pose.orientation.z = math.sin(yaw / 2.0)
+        ps.pose.orientation.w = math.cos(yaw / 2.0)
+        self.logo_pose_pub.publish(ps)
 
     # ──────────────────────────────────────────────────────────────
     def _apriltag_cb(self, msg):
@@ -421,6 +502,26 @@ class LogoDetectorNode(Node):
         m.lifetime.sec = 0
         return m
 
+    def _arrow_marker(self, mid, ns, x, y, z, yaw, length=0.4):
+        m = Marker()
+        m.header.frame_id = self.map_frame
+        m.header.stamp = self.get_clock().now().to_msg()
+        m.ns = ns
+        m.id = mid
+        m.type = Marker.ARROW
+        m.action = Marker.ADD
+        m.pose.position.x = x
+        m.pose.position.y = y
+        m.pose.position.z = z + 0.05
+        m.pose.orientation.z = math.sin(yaw / 2.0)
+        m.pose.orientation.w = math.cos(yaw / 2.0)
+        m.scale.x = length
+        m.scale.y = 0.05
+        m.scale.z = 0.05
+        m.color.r = 1.0; m.color.g = 1.0; m.color.b = 0.0; m.color.a = 1.0
+        m.lifetime.sec = 0
+        return m
+
     def _publish_markers(self):
         arr = MarkerArray()
         for idx, (name, x, y, z, rgb) in enumerate(self._locked_logos):
@@ -430,6 +531,12 @@ class LogoDetectorNode(Node):
         for tag_id, (x, y, z) in self._locked_tags.items():
             arr.markers.append(self._plane_marker(tag_id, "apriltag", x, y, z, 1.0, 1.0, 0.0, self.tag_size))
             arr.markers.append(self._text_marker(tag_id, "apriltag_text", x, y, z, f"tag{tag_id}"))
+        for idx, (cx, cy, cz, yaw) in enumerate(self._locked_logo_poses):
+            arr.markers.append(self._arrow_marker(idx, "logo_orientation", cx, cy, cz, yaw))
+            arr.markers.append(self._text_marker(
+                idx, "logo_orient_text", cx, cy, cz,
+                f"logo#{idx+1} {math.degrees(yaw):.0f}°",
+            ))
         self.marker_pub.publish(arr)
 
 

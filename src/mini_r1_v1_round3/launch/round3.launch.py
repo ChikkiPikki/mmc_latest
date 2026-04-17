@@ -27,13 +27,17 @@ def generate_launch_description():
     grid_world_worlds = os.path.join(grid_world_root, 'worlds')
     grid_world_parent = os.path.dirname(grid_world_root)
     textures_dir = os.path.join(grid_world_root, 'materials', 'textures')
-    world_file = 'grid_world_FINAL.sdf'
+    world_file = os.path.join(grid_world_worlds, 'grid_world_FINAL.sdf')
+    resource_path = f'{grid_world_parent}:{grid_world_root}:{grid_world_worlds}:' \
+                    + os.environ.get('IGN_GAZEBO_RESOURCE_PATH', '')
 
+    # Set both Fortress (IGN) and Harmonic (GZ) resource path env vars so the
+    # world SDF and its model:// references resolve regardless of which backend
+    # ros_gz_sim selects at runtime.
     set_resource_path = SetEnvironmentVariable(
-        name='IGN_GAZEBO_RESOURCE_PATH',
-        value=f'{grid_world_parent}:{grid_world_root}:{grid_world_worlds}:'
-              + os.environ.get('IGN_GAZEBO_RESOURCE_PATH', '')
-    )
+        name='IGN_GAZEBO_RESOURCE_PATH', value=resource_path)
+    set_gz_resource_path = SetEnvironmentVariable(
+        name='GZ_SIM_RESOURCE_PATH', value=resource_path)
 
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -224,6 +228,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         set_resource_path,
+        set_gz_resource_path,
         gz_sim,
         rsp,
         static_tf_lidar,

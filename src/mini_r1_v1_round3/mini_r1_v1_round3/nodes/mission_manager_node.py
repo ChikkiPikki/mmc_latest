@@ -101,6 +101,13 @@ class MissionManagerNode(Node):
         )
         self._tag_positions = {}
 
+        self.create_subscription(
+            PoseStamped, '/logo/pose',
+            self._on_logo_pose, latched_sub,
+        )
+        # List of (yaw_rad, x, y) — one entry per detected logo, in detection order.
+        self._logo_orientations = []
+
         self.state_pub = self.create_publisher(String, '/mission/state', 10)
         self.ended_pub = self.create_publisher(Empty, '/mission_ended', 1)
 
@@ -225,6 +232,17 @@ class MissionManagerNode(Node):
                 self._tag_positions[int(k)] = (float(v[0]), float(v[1]))
             except (ValueError, IndexError, TypeError):
                 continue
+
+    def _on_logo_pose(self, msg: PoseStamped):
+        q = msg.pose.orientation
+        yaw = quat_to_yaw(q.x, q.y, q.z, q.w)
+        lx = msg.pose.position.x
+        ly = msg.pose.position.y
+        self._logo_orientations.append((yaw, lx, ly))
+        self.get_logger().info(
+            f'[LOGO] #{len(self._logo_orientations)} orientation received: '
+            f'{math.degrees(yaw):.1f}° at ({lx:.2f},{ly:.2f})'
+        )
 
     def _on_logged_tags(self, msg: String):
         try:
@@ -428,7 +446,16 @@ class MissionManagerNode(Node):
             self.get_logger().warn(f'[ENTER_EXPLORING] nearest_remaining failed: {e}')
             wp = self.sweep_waypoints[self.sweep_idx]
         x, y = wp[0], wp[1]
-        yaw = math.atan2(y - self.robot_y, x - self.robot_x)
+        # On the first waypoint, align to the first detected logo orientation so
+        # the robot heads in the direction the logo points (green → orange axis).
+        if self.sweep_idx == 0 and self._logo_orientations:
+            yaw = self._logo_orientations[0][0]
+            self.get_logger().info(
+                f'[ENTER_EXPLORING] Using logo heading {math.degrees(yaw):.1f}° '
+                f'for initial waypoint'
+            )
+        else:
+            yaw = math.atan2(y - self.robot_y, x - self.robot_x)
         self._send_goal(x, y, yaw)
 
     def _enter_execute_tag_turn(self):
