@@ -5,3 +5,13 @@ install/
 log/
 *.egg-info/
 legacy_src/
+dataset/
+dataset.zip
+.round3_staging/
+src/mini_r1_v1_description/worlds/generated/
+src/mini_r1_v1_description/worlds/models/
+src/mini_r1_v1_description/worlds/dataset_sim.log
+src/mini_r1_v1_description/worlds/map.png
+src/mini_r1_v1_description/worlds/output.world
+src/mini_r1_v1_description/worlds/output.world.orig
+

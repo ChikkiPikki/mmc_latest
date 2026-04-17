@@ -5,8 +5,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node, LifecycleNode
-from launch_ros.descriptions import ParameterFile
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
@@ -51,12 +50,14 @@ def generate_launch_description():
             ],
         ),
 
-        # ── Local costmap (nav2_costmap_2d lifecycle node) ──
-        LifecycleNode(
+        # ── Local costmap (nav2_costmap_2d standalone) ──
+        # nav2 Humble hardcodes namespace="costmap", name="costmap" → node is /costmap/costmap
+        # YAML must use costmap.costmap.ros__parameters to match.
+        # Publishes on /costmap/costmap (no remapping — matches hardcoded name).
+        Node(
             package='nav2_costmap_2d',
             executable='nav2_costmap_2d',
             name='local_costmap',
-            namespace='',
             output='screen',
             parameters=[
                 os.path.join(pkg_dir, 'config', 'costmap.yaml'),
@@ -73,7 +74,8 @@ def generate_launch_description():
             parameters=[{
                 'use_sim_time': use_sim_time,
                 'autostart': True,
-                'node_names': ['local_costmap'],
+                'node_names': ['costmap/costmap'],
+                'bond_timeout': 0.0,
             }],
         ),
     ])

@@ -8,9 +8,10 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Point
 from nav_msgs.msg import Path, OccupancyGrid, Odometry
-from std_msgs.msg import String, Header
+from std_msgs.msg import String, Header, ColorRGBA
+from visualization_msgs.msg import Marker
 
 
 class RRTNode:
@@ -32,7 +33,7 @@ class RRTPlannerNode(Node):
         self.declare_parameter('step_size_m', 0.20)
         self.declare_parameter('goal_bias', 0.20)
         self.declare_parameter('obstacle_threshold', 65)
-        self.declare_parameter('robot_radius_m', 0.18)
+        self.declare_parameter('robot_radius_m', 0.0)
         self.declare_parameter('path_simplify', True)
         self.declare_parameter('timeout_s', 0.5)
         self.declare_parameter('use_rrt_star', False)
@@ -58,15 +59,21 @@ class RRTPlannerNode(Node):
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             depth=5)
+        costmap_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1)
 
         # Subscribers
         self.create_subscription(PoseStamped, '/plan_request', self._plan_request_cb, 10)
-        self.create_subscription(OccupancyGrid, '/local_costmap/costmap', self._costmap_cb, 10)
+        self.create_subscription(OccupancyGrid, '/costmap/costmap', self._costmap_cb, costmap_qos)
         self.create_subscription(Odometry, '/odometry/filtered', self._odom_cb, sensor_qos)
 
         # Publishers
         self.path_pub = self.create_publisher(Path, '/planned_path', 10)
         self.status_pub = self.create_publisher(String, '/planner/status', 10)
+        self.tree_pub = self.create_publisher(Marker, '/rrt/tree', 10)
 
         # Heartbeat timer (1 Hz status)
         self.create_timer(1.0, self._status_tick)
@@ -78,9 +85,15 @@ class RRTPlannerNode(Node):
     # ── Callbacks ──────────────────────────────────────────────────────
 
     def _costmap_cb(self, msg: OccupancyGrid):
-        self.costmap = np.array(msg.data, dtype=np.int8).reshape(
+        self.costmap = np.array(msg.data, dtype=np.uint8).reshape(
             (msg.info.height, msg.info.width))
         self.costmap_info = msg.info
+        if not hasattr(self, '_costmap_logged'):
+            occupied = int(np.count_nonzero(self.costmap >= 65))
+            self.get_logger().info(
+                f'Costmap received: {msg.info.width}x{msg.info.height}, '
+                f'res={msg.info.resolution}, occupied_cells={occupied}')
+            self._costmap_logged = True
 
     def _odom_cb(self, msg: Odometry):
         self.odom = msg
@@ -105,7 +118,8 @@ class RRTPlannerNode(Node):
 
         self.get_logger().info(f'Planning: ({sx:.2f},{sy:.2f}) -> ({gx:.2f},{gy:.2f})')
 
-        path = self._run_rrt(sx, sy, gx, gy)
+        path, tree = self._run_rrt(sx, sy, gx, gy)
+        self._publish_tree(tree, msg.header.stamp)
 
         if path is None:
             self.get_logger().warn('RRT failed to find path')
@@ -156,9 +170,10 @@ class RRTPlannerNode(Node):
                 # Add goal node
                 if self._collision_free(nx, ny, gx, gy):
                     goal_node = RRTNode(gx, gy, parent=new_node)
-                    return self._extract_path(goal_node)
+                    tree.append(goal_node)
+                    return self._extract_path(goal_node), tree
 
-        return None
+        return None, tree
 
     def _random_sample(self):
         """Sample a random point within the costmap bounds."""
@@ -250,6 +265,25 @@ class RRTPlannerNode(Node):
         return simplified
 
     # ── Publishing ─────────────────────────────────────────────────────
+
+    def _publish_tree(self, tree, stamp):
+        """Publish RRT tree edges as a LINE_LIST marker."""
+        marker = Marker()
+        marker.header = Header(stamp=stamp, frame_id='odom')
+        marker.ns = 'rrt_tree'
+        marker.id = 0
+        marker.type = Marker.LINE_LIST
+        marker.action = Marker.ADD
+        marker.scale.x = 0.015  # line width
+        marker.color = ColorRGBA(r=0.3, g=0.7, b=1.0, a=0.4)
+        marker.pose.orientation.w = 1.0
+
+        for node in tree:
+            if node.parent is not None:
+                marker.points.append(Point(x=node.parent.x, y=node.parent.y, z=0.02))
+                marker.points.append(Point(x=node.x, y=node.y, z=0.02))
+
+        self.tree_pub.publish(marker)
 
     def _publish_path(self, waypoints, stamp):
         msg = Path()

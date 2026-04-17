@@ -37,13 +37,9 @@
   direction: GZ_TO_ROS
 
 # ==========================================================
-# TF (ONLY DYNAMIC TF — OK)
+# TF — odom→base_link is published by the EKF node, NOT bridged
+# from Gazebo directly (bridging both causes TF jitter).
 # ==========================================================
-- ros_topic_name: "/tf"
-  gz_topic_name: "/r1_mini/odom_tf"
-  ros_type_name: "tf2_msgs/msg/TFMessage"
-  gz_type_name: "ignition.msgs.Pose_V"
-  direction: GZ_TO_ROS
 
 # ==========================================================
 # SENSORS
@@ -61,7 +57,7 @@
   direction: GZ_TO_ROS
 
 - ros_topic_name: "/r1_mini/camera/image_raw"
-  gz_topic_name: "/r1_mini/camera"
+  gz_topic_name: "/r1_mini/camera/image"
   ros_type_name: "sensor_msgs/msg/Image"
   gz_type_name: "ignition.msgs.Image"
   direction: GZ_TO_ROS

@@ -5,6 +5,7 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction
+from launch.conditions import IfCondition, UnlessCondition
 from launch_ros.actions import Node
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -86,6 +87,7 @@ def generate_launch_description():
     empty_world = os.path.join(description_package_share, 'worlds', 'empty.sdf')
     default_world = output_world if os.path.exists(output_world) else empty_world
     world_path = LaunchConfiguration('world')
+    headless = LaunchConfiguration('headless')
 
     rsp = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -94,13 +96,27 @@ def generate_launch_description():
         launch_arguments={"use_sim_time": "true", 'use_control': "false"}.items()
     )
 
-    gz = IncludeLaunchDescription(
+    gz_args_headful = ['-r ', world_path]
+    gz_args_headless = ['-s -r --headless-rendering ', world_path]
+
+    gz_headful = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             [os.path.join(get_package_share_directory("ros_gz_sim"),
                           'launch', 'gz_sim.launch.py')]
         ),
-        launch_arguments={"gz_args": ['-r ', world_path],
+        launch_arguments={"gz_args": gz_args_headful,
                           'on_exit_shutdown': 'true'}.items(),
+        condition=UnlessCondition(headless),
+    )
+
+    gz_headless = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            [os.path.join(get_package_share_directory("ros_gz_sim"),
+                          'launch', 'gz_sim.launch.py')]
+        ),
+        launch_arguments={"gz_args": gz_args_headless,
+                          'on_exit_shutdown': 'true'}.items(),
+        condition=IfCondition(headless),
     )
 
     stamper = Node(
@@ -127,6 +143,8 @@ def generate_launch_description():
         name='rviz2',
         output='screen',
         arguments=['-d', rviz_config],
+        parameters=[{'use_sim_time': True}],
+        condition=UnlessCondition(headless),
     )
 
     launch_args = [
@@ -134,14 +152,20 @@ def generate_launch_description():
             name="world",
             default_value=default_world,
             description="Absolute path to the world SDF file"
-        )
+        ),
+        DeclareLaunchArgument(
+            name="headless",
+            default_value="false",
+            description="Run Gazebo server-only (no GUI, no RViz) for dataset capture"
+        ),
     ]
 
     return LaunchDescription([
         *launch_args,
         rsp,
         stamper,
-        gz,
+        gz_headful,
+        gz_headless,
         ros_gz_bridge,
         rviz_node,
         OpaqueFunction(function=launch_setup),

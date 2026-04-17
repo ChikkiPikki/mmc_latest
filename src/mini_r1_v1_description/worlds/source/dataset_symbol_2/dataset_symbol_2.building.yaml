@@ -1,0 +1,68 @@
+coordinate_system: reference_image
+crowd_sim:
+  agent_groups:
+    - {agents_name: [], agents_number: 0, group_id: 0, profile_selector: external_agent, state_selector: external_static, x: 0, y: 0}
+  agent_profiles:
+    - {ORCA_tau: 1, ORCA_tauObst: 0.40000000000000002, class: 1, max_accel: 0, max_angle_vel: 0, max_neighbors: 10, max_speed: 0, name: external_agent, neighbor_dist: 5, obstacle_set: 1, pref_speed: 0, r: 0.25}
+  enable: 0
+  goal_sets: []
+  model_types: []
+  obstacle_set: {class: 1, file_name: floor_0_navmesh.nav, type: nav_mesh}
+  states:
+    - {final: 1, goal_set: -1, name: external_static, navmesh_file_name: ""}
+  transitions: []
+  update_time_step: 0.10000000000000001
+graphs:
+  {}
+levels:
+  floor_0:
+    drawing:
+      filename: map.png
+    elevation: 0
+    floors:
+      - parameters: {ceiling_scale: [3, 1], ceiling_texture: [1, blue_linoleum], indoor: [2, 0], texture_name: [1, blue_linoleum], texture_rotation: [3, 0], texture_scale: [3, 1]}
+        vertices: [2, 3, 4, 0]
+    layers:
+      {}
+    measurements:
+      - [0, 1, {distance: [3, 1]}]
+    vertices:
+      - [103.602, 860.71900000000005, 0, ""]
+      - [206.946, 860.71900000000005, 0, ""]
+      - [105.00700000000001, 145.62100000000001, 0, ""]
+      - [1547.203, 146.16800000000001, 0, ""]
+      - [1545.463, 859.07399999999996, 0, ""]
+      - [109.199, 455.65699999999998, 0, ""]
+      - [1240.136, 453.93299999999999, 0, ""]
+      - [1237.0440000000001, 656.77099999999996, 0, ""]
+      - [411.447, 659.30799999999999, 0, ""]
+      - [1489.9829999999999, 687.92399999999998, 0, aruco_0_0]
+      - [673.60900000000004, 827.70299999999997, 0, aruco_1_45]
+      - [209.65899999999999, 363.75299999999999, 0, spawn_0]
+      - [1137.559, 563.01400000000001, 0, goal]
+      - [279.28679999999997, 321.3058, 0, symbol_2_0]
+      - [403.29959999999994, 321.3058, 0, symbol_2_90]
+      - [527.3123999999999, 321.3058, 0, symbol_2_180]
+      - [651.3251999999999, 321.3058, 0, symbol_2_270]
+      - [775.3379999999999, 321.3058, 0, symbol_2_45]
+      - [899.3507999999998, 321.3058, 0, symbol_2_135]
+      - [1023.3635999999998, 321.3058, 0, symbol_2_225]
+      - [1147.3763999999999, 321.3058, 0, symbol_2_315]
+      - [1271.3891999999998, 321.3058, 0, symbol_2_0]
+      - [1395.4019999999998, 321.3058, 0, symbol_2_90]
+      - [1395.4019999999998, 445.31859999999995, 0, symbol_2_180]
+      - [279.28679999999997, 569.3313999999999, 0, symbol_2_270]
+      - [1395.4019999999998, 569.3313999999999, 0, symbol_2_45]
+      - [279.28679999999997, 693.3441999999999, 0, symbol_2_135]
+      - [1395.4019999999998, 693.3441999999999, 0, symbol_2_225]
+    walls:
+      - [2, 3, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [3, 4, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [4, 0, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [0, 5, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [5, 2, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [8, 7, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [7, 6, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [6, 5, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+lifts: {}
+name: simple

@@ -152,7 +152,7 @@ class DynamicObstacleNode(Node):
     def __init__(self):
         super().__init__('dynamic_obstacle_node')
 
-        self.declare_parameter('world_name', 'sim_world')
+        self.declare_parameter('world_name', 'generated_world')
         self.world_name = self.get_parameter('world_name').value
 
         self.drivers = []

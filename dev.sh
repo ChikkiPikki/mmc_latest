@@ -25,6 +25,14 @@ build() {
 run() {
     xhost +local:docker 2>/dev/null || true
 
+    # Match the host render device group so EGL/GPU sensors work
+    local render_gid=""
+    if [ -e /dev/dri/renderD128 ]; then
+        render_gid="--group-add $(stat -c '%g' /dev/dri/renderD128)"
+    fi
+
+    mkdir -p "${SCRIPT_DIR}/dataset"
+
     echo "==> Starting container: ${CONTAINER_NAME}"
     docker run -it --rm \
         --name "${CONTAINER_NAME}" \
@@ -34,12 +42,16 @@ run() {
         --env QT_X11_NO_MITSHM=1 \
         --volume /tmp/.X11-unix:/tmp/.X11-unix:rw \
         --volume "${SCRIPT_DIR}/src:/home/dev/ros2_ws/src" \
+        --volume "${SCRIPT_DIR}/dataset:/home/dev/dataset" \
         --device /dev/dri \
+        ${render_gid} \
         "${IMAGE_NAME}"
 }
 
 run_detached() {
     xhost +local:docker 2>/dev/null || true
+
+    mkdir -p "${SCRIPT_DIR}/dataset"
 
     echo "==> Starting container (detached): ${CONTAINER_NAME}"
     docker run -d --rm \
@@ -51,6 +63,7 @@ run_detached() {
         --env QT_X11_NO_MITSHM=1 \
         --volume /tmp/.X11-unix:/tmp/.X11-unix:rw \
         --volume "${SCRIPT_DIR}/src:/home/dev/ros2_ws/src" \
+        --volume "${SCRIPT_DIR}/dataset:/home/dev/dataset" \
         --device /dev/dri \
         "${IMAGE_NAME}" \
         bash -c "sleep infinity"
