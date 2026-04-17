@@ -14,7 +14,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from std_msgs.msg import String, Empty, Int32MultiArray
-from nav_msgs.msg import Odometry, Path
+from nav_msgs.msg import Odometry, OccupancyGrid, Path
 from geometry_msgs.msg import PoseArray, PoseStamped, Pose, Twist
 import tf2_ros
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
@@ -89,6 +89,12 @@ class MissionManagerNode(Node):
         self.create_subscription(Int32MultiArray, '/visited_tiles', self._on_visited_tiles, 10)
         self.create_subscription(PoseStamped, '/stop_zone', self._on_stop_zone, 10)
         self.create_subscription(Odometry, '/odometry/filtered', self._on_odom, 20)
+        self.create_subscription(OccupancyGrid, '/map', self._on_map, 1)
+        self.create_subscription(OccupancyGrid, '/global_costmap/costmap', self._on_costmap, 1)
+        self._have_map = False
+        self._have_costmap = False
+        self._map_received_at = 0.0
+        self._costmap_warmup_s = 3.0
         self.create_subscription(String, '/logged_tags', self._on_logged_tags, 10)
         latched_sub = QoSProfile(
             depth=1,
@@ -220,6 +226,17 @@ class MissionManagerNode(Node):
                 f'[ODOM] First odom received at ({self.robot_x:.2f}, {self.robot_y:.2f})')
         self._have_odom = True
         self._odom_history.append((time.time(), self.robot_x, self.robot_y))
+
+    def _on_map(self, msg: OccupancyGrid):
+        if not self._have_map:
+            self._have_map = True
+            self._map_received_at = time.time()
+            self.get_logger().info('[MAP] First map received — waiting for costmap...')
+
+    def _on_costmap(self, msg: OccupancyGrid):
+        if not self._have_costmap:
+            self._have_costmap = True
+            self.get_logger().info('[MAP] Global costmap ready — goals can now be sent.')
 
     def _on_tag_positions(self, msg: String):
         try:
@@ -547,6 +564,20 @@ class MissionManagerNode(Node):
             if not self._have_odom:
                 self.get_logger().info(
                     '[TICK] Waiting for odometry before sending first goal...',
+                    throttle_duration_sec=2.0)
+                return
+            if not self._have_map:
+                self.get_logger().info(
+                    '[TICK] Waiting for SLAM map before sending first goal...',
+                    throttle_duration_sec=2.0)
+                return
+            costmap_ready = self._have_costmap or (
+                self._map_received_at > 0
+                and (time.time() - self._map_received_at) >= self._costmap_warmup_s
+            )
+            if not costmap_ready:
+                self.get_logger().info(
+                    '[TICK] Waiting for Nav2 costmap to initialize...',
                     throttle_duration_sec=2.0)
                 return
             self.get_logger().info(

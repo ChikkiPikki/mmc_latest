@@ -23,6 +23,7 @@ Log lines (throttled to ~3s):
 
 import json
 import math
+import struct
 import numpy as np
 import cv2
 import rclpy
@@ -31,7 +32,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 import message_filters
 from cv_bridge import CvBridge
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image, CameraInfo, PointCloud2, PointField
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 from visualization_msgs.msg import Marker, MarkerArray
@@ -77,6 +78,7 @@ class LogoDetectorNode(Node):
         self.declare_parameter("logo_plane_size_m", 0.20)
         self.declare_parameter("depth_is_optical", True)
         self.declare_parameter("logo_cluster_radius_m", 0.7)
+        self.declare_parameter("max_cloud_pts_per_color", 400)
 
         self.map_frame            = self.get_parameter("map_frame").value
         self.min_cluster_px       = int(self.get_parameter("min_cluster_px").value)
@@ -88,6 +90,7 @@ class LogoDetectorNode(Node):
         self.logo_size            = float(self.get_parameter("logo_plane_size_m").value)
         self.depth_is_optical     = bool(self.get_parameter("depth_is_optical").value)
         self._logo_cluster_r_sq   = float(self.get_parameter("logo_cluster_radius_m").value) ** 2
+        self._max_cloud_pts       = int(self.get_parameter("max_cloud_pts_per_color").value)
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -117,6 +120,7 @@ class LogoDetectorNode(Node):
         self.marker_pub    = self.create_publisher(MarkerArray,  "/logo/markers",          latched)
         self.tag_pos_pub   = self.create_publisher(String,       "/apriltag/map_positions", latched)
         self.logo_pose_pub = self.create_publisher(PoseStamped,  "/logo/pose",             latched)
+        self.logo_cloud_pub = self.create_publisher(PointCloud2, "/logo/points",           10)
         self.depth_viz_pub = self.create_publisher(Image,        "/logo/depth_viz",        10)
         self.mask_viz_pub  = self.create_publisher(Image,        "/logo/mask_viz",         10)
 
@@ -338,12 +342,82 @@ class LogoDetectorNode(Node):
 
         self._publish_depth_viz(depth, msg_depth.header.stamp)
         self._publish_mask_viz(rgb, hsv, msg_rgb.header.stamp)
+        self._publish_logo_cloud(hsv, depth, rot, t_vec, fx, fy, cx, cy,
+                                 msg_rgb.header.stamp)
 
         if new_detections:
             self._try_lock_logo()
 
         if new_detections or self._locked_tags:
             self._publish_markers()
+
+    # ──────────────────────────────────────────────────────────────
+    def _deproject_mask(self, mask, depth, fx, fy, cx, cy):
+        """Vectorized deprojection of all non-zero mask pixels to 3D camera-frame points."""
+        ys, xs = np.where(mask > 0)
+        if len(xs) == 0:
+            return np.empty((0, 3), dtype=np.float32)
+        if len(xs) > self._max_cloud_pts:
+            idx = np.random.choice(len(xs), self._max_cloud_pts, replace=False)
+            xs, ys = xs[idx], ys[idx]
+        h, w = depth.shape[:2]
+        valid = (xs >= 0) & (xs < w) & (ys >= 0) & (ys < h)
+        xs, ys = xs[valid], ys[valid]
+        ds = depth[ys, xs].astype(np.float64)
+        valid = (ds > self.min_depth) & (ds < self.max_depth) & np.isfinite(ds)
+        xs, ys, ds = xs[valid], ys[valid], ds[valid]
+        if len(xs) == 0:
+            return np.empty((0, 3), dtype=np.float32)
+        opt_x = (xs - cx) * ds / fx
+        opt_y = (ys - cy) * ds / fy
+        if self.depth_is_optical:
+            pts = np.stack([opt_x, opt_y, ds], axis=1)
+        else:
+            pts = np.stack([ds, -opt_x, -opt_y], axis=1)
+        return pts.astype(np.float32)
+
+    def _publish_logo_cloud(self, hsv, depth, rot, t_vec, fx, fy, cx, cy, stamp):
+        """Deproject all detected logo color pixels to 3D map coords and publish PointCloud2."""
+        segments = []
+        for name, _, lo, hi, rviz_rgb, _ in COLOR_TARGETS:
+            mask = cv2.inRange(hsv, lo, hi)
+            if cv2.countNonZero(mask) < self.min_cluster_px:
+                continue
+            pts_cam = self._deproject_mask(mask, depth, fx, fy, cx, cy)
+            if len(pts_cam) == 0:
+                continue
+            pts_map = (rot @ pts_cam.T).T + t_vec
+            r, g, b = rviz_rgb
+            rgb_int = (int(r * 255) << 16) | (int(g * 255) << 8) | int(b * 255)
+            rgb_float = struct.unpack('f', struct.pack('I', rgb_int))[0]
+            segments.append((pts_map.astype(np.float32), rgb_float))
+
+        if not segments:
+            return
+
+        rows = []
+        for pts, rgb_f in segments:
+            col = np.full((len(pts), 1), rgb_f, dtype=np.float32)
+            rows.append(np.hstack([pts, col]))
+        data = np.vstack(rows)
+
+        cloud = PointCloud2()
+        cloud.header.frame_id = self.map_frame
+        cloud.header.stamp = stamp
+        cloud.height = 1
+        cloud.width = len(data)
+        cloud.fields = [
+            PointField(name='x',   offset=0,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='y',   offset=4,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='z',   offset=8,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='rgb', offset=12, datatype=PointField.FLOAT32, count=1),
+        ]
+        cloud.is_bigendian = False
+        cloud.point_step = 16
+        cloud.row_step = 16 * len(data)
+        cloud.is_dense = False
+        cloud.data = data.tobytes()
+        self.logo_cloud_pub.publish(cloud)
 
     # ──────────────────────────────────────────────────────────────
     def _try_lock_logo(self):
