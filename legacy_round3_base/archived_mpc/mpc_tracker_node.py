@@ -14,6 +14,7 @@ Architecture:
   creep forward, resume MPC when clear.
 """
 import math
+import time
 import numpy as np
 import casadi as ca
 
@@ -43,13 +44,16 @@ QN = np.diag([12.0, 12.0, 4.0])
 R = np.diag([0.5, 0.4])
 
 # ── Obstacle params ────────────────────────────────────────────────────────
-OBS_FRONT_DEG = 60.0
+OBS_FRONT_DEG = 60.0      # total front cone (±OBS_FRONT_DEG/2 from forward)
 OBS_SIDE_DEG = 100.0
 OBS_AVOID_D = 0.40
 OBS_CLEAR_D = 0.55
 OBS_STOP_D = 0.25
 TURN_SPEED = 1.0
 CREEP_SPEED = 0.08
+AVOID_STUCK_T = 3.0       # seconds in AVOID before forcing a backup
+BACKUP_T = 1.2            # seconds of backup
+BACKUP_V = -0.10
 
 # ── Path / goal params ─────────────────────────────────────────────────────
 LOOKAHEAD = 0.5
@@ -134,6 +138,8 @@ class MPCTrackerNode(Node):
         self.obs_angle = 0.0
         self.avoiding = False
         self.avoid_dir = 0.0
+        self.avoid_entered_at = 0.0
+        self.backing_up_until = 0.0
 
         self.get_logger().info('Building MPC (CasADi/IPOPT)…')
         self.opti, self.Xv, self.Uv, self.Pv = build_mpc()
@@ -193,12 +199,12 @@ class MPCTrackerNode(Node):
         self.scan_ranges = list(msg.ranges)
         self.scan_amin = msg.angle_min
         self.scan_ainc = msg.angle_increment
-        arc = math.radians(OBS_FRONT_DEG)
+        half_arc = math.radians(OBS_FRONT_DEG) / 2.0
         md = float('inf')
         ma = 0.0
         for i, r in enumerate(msg.ranges):
             a = msg.angle_min + i * msg.angle_increment
-            if abs(a) <= arc and math.isfinite(r) and msg.range_min < r < msg.range_max:
+            if abs(a) <= half_arc and math.isfinite(r) and msg.range_min < r < msg.range_max:
                 if r < md:
                     md = r
                     ma = a
@@ -325,16 +331,36 @@ class MPCTrackerNode(Node):
             r = self._side_range(left=False)
             self.avoid_dir = 1.0 if l >= r else -1.0
             self.avoiding = True
+            self.avoid_entered_at = time.time()
+            self.backing_up_until = 0.0
             self.u_prev = np.zeros((2, N))
             side = 'left' if self.avoid_dir > 0 else 'right'
             self.get_logger().warn(f'Obstacle {fd:.2f}m — avoiding {side}')
 
         if self.avoiding:
+            now = time.time()
+            if now < self.backing_up_until:
+                self._send(BACKUP_V, 0.0)
+                self.get_logger().warn(
+                    f'[AVOID-BACKUP] v={BACKUP_V:.2f} obs={fd:.2f}m',
+                    throttle_duration_sec=0.5)
+                return
             if fd > OBS_CLEAR_D:
                 self.path_idx = self._closest_idx()
                 self.avoiding = False
+                self.avoid_entered_at = 0.0
+                self.backing_up_until = 0.0
                 self.u_prev = np.zeros((2, N))
                 self.get_logger().info('Obstacle cleared — resuming MPC ✓')
+            elif now - self.avoid_entered_at > AVOID_STUCK_T:
+                self.backing_up_until = now + BACKUP_T
+                self.avoid_dir = -self.avoid_dir
+                self.avoid_entered_at = now + BACKUP_T
+                self.get_logger().warn(
+                    f'[AVOID] Stuck {AVOID_STUCK_T:.1f}s — backing up {BACKUP_T:.1f}s '
+                    f'and flipping turn direction')
+                self._send(BACKUP_V, 0.0)
+                return
             else:
                 turn = TURN_SPEED * self.avoid_dir
                 if abs(self.obs_angle) > math.radians(20) or fd > OBS_STOP_D + 0.15:

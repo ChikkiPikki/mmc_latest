@@ -201,18 +201,6 @@ def generate_launch_description():
         parameters=[{'use_sim_time': True}],
     )
 
-    mpc_tracker = Node(
-        package='mini_r1_v1_round3',
-        executable='mpc_tracker_node',
-        name='mpc_tracker_node',
-        output='screen',
-        parameters=[{
-            'use_sim_time': True,
-            'map_frame': 'map',
-            'base_frame': 'base_link',
-        }],
-    )
-
     logo_detector = Node(
         package='mini_r1_v1_round3',
         executable='logo_detector_node',
@@ -241,11 +229,10 @@ def generate_launch_description():
         static_tf_lidar,
         static_tf_cam,
         static_tf_imu,
-        TimerAction(period=8.0, actions=[bridge]),
-        TimerAction(period=10.0, actions=[spawn_robot]),
-        TimerAction(period=12.0, actions=[ekf]),
-        TimerAction(period=13.0, actions=[slam]),
-        TimerAction(period=15.0, actions=[nav2]),
-        TimerAction(period=17.0, actions=[apriltag]),
-        TimerAction(period=19.0, actions=[mpc_tracker, tile_detector, tag_command, mission_manager, nav_diagnostic, logo_detector, rviz_node]),
+        TimerAction(period=2.0, actions=[bridge]),
+        TimerAction(period=3.0, actions=[spawn_robot]),
+        TimerAction(period=4.0, actions=[ekf]),
+        TimerAction(period=5.0, actions=[slam]),
+        TimerAction(period=6.0, actions=[nav2]),
+        TimerAction(period=7.0, actions=[apriltag, tile_detector, tag_command, mission_manager, nav_diagnostic, logo_detector, rviz_node]),
     ])

@@ -17,7 +17,7 @@ from std_msgs.msg import String, Empty, Int32MultiArray
 from nav_msgs.msg import Odometry, Path
 from geometry_msgs.msg import PoseArray, PoseStamped, Pose, Twist
 import tf2_ros
-from nav2_simple_commander.robot_navigator import BasicNavigator
+from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 
 from mini_r1_v1_round3.utils.sweep_planner import (
     boustrophedon_waypoints, grid_cell_waypoints, nearest_remaining,
@@ -81,12 +81,7 @@ class MissionManagerNode(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         self.nav = BasicNavigator()
-        self.get_logger().info('Waiting for Nav2 to become active...')
-        try:
-            self.nav._waitForNodeToActivate('bt_navigator')
-        except Exception as e:
-            self.get_logger().warn(f'Nav2 active wait returned: {e}')
-        self.get_logger().info('Nav2 active.')
+        self._nav_ready = False
 
         self.create_subscription(String, '/tag_commands', self._on_tag_command, 10)
         self.create_subscription(PoseArray, '/detected_tiles', self._on_detected_tiles, 10)
@@ -109,18 +104,11 @@ class MissionManagerNode(Node):
         self.state_pub = self.create_publisher(String, '/mission/state', 10)
         self.ended_pub = self.create_publisher(Empty, '/mission_ended', 1)
 
-        latched = QoSProfile(
-            depth=1,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        )
-        self.mpc_path_pub = self.create_publisher(Path, '/mpc/path', latched)
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.create_subscription(Empty, '/mpc/goal_reached', self._on_goal_reached, latched)
 
-        self._mpc_goal_active = False
-        self._mpc_goal_reached = False
-        self._mpc_goal_submitted_at = 0.0
+        self._nav_goal_active = False
+        self._nav_goal_submitted_at = 0.0
+        self._nav_last_reached = False
 
         self.state = EXPLORING
         self._prev_state = None
@@ -276,57 +264,53 @@ class MissionManagerNode(Node):
         ps.pose.orientation.w = qw
         return ps
 
-    def _on_goal_reached(self, _msg: Empty):
-        if self._mpc_goal_active:
-            self.get_logger().info('[MPC] Goal reached notification received')
-            self._mpc_goal_reached = True
-            self._mpc_goal_active = False
-
     def _cancel_mpc(self):
-        if not self._mpc_goal_active:
+        if not self._nav_goal_active:
             return
-        self._mpc_goal_active = False
+        try:
+            self.nav.cancelTask()
+        except Exception as e:
+            self.get_logger().warn(f'[NAV] cancelTask raised: {e!r}')
+        self._nav_goal_active = False
         self.cmd_pub.publish(Twist())
-        empty_path = Path()
-        empty_path.header.frame_id = 'map'
-        empty_path.header.stamp = self.get_clock().now().to_msg()
-        self.mpc_path_pub.publish(empty_path)
 
     def _send_goal(self, x, y, yaw):
         self._current_goal = (x, y, yaw)
         self.get_logger().info(
-            f'[GOAL] Planning to ({x:.2f}, {y:.2f}, yaw={math.degrees(yaw):.1f}°) '
+            f'[GOAL] goToPose ({x:.2f}, {y:.2f}, yaw={math.degrees(yaw):.1f}°) '
             f'from robot=({self.robot_x:.2f}, {self.robot_y:.2f})')
         goal_ps = self._make_pose_stamped(x, y, yaw)
-        start_ps = self._make_pose_stamped(self.robot_x, self.robot_y, self.robot_yaw)
         try:
-            path = self.nav.getPath(start_ps, goal_ps, planner_id='GridBased', use_start=False)
+            self.nav.goToPose(goal_ps)
         except Exception as e:
-            self.get_logger().error(f'[GOAL] getPath raised: {e!r}')
-            path = None
-        if path is None or len(path.poses) < 2:
-            self.get_logger().warn('[GOAL] planner returned empty path — publishing direct line')
-            path = Path()
-            path.header.frame_id = 'map'
-            path.header.stamp = self.get_clock().now().to_msg()
-            for (px, py) in ((self.robot_x, self.robot_y), (x, y)):
-                ps = PoseStamped()
-                ps.header = path.header
-                ps.pose.position.x = px
-                ps.pose.position.y = py
-                ps.pose.orientation.w = 1.0
-                path.poses.append(ps)
-        else:
-            path.header.frame_id = path.header.frame_id or 'map'
-            path.header.stamp = self.get_clock().now().to_msg()
-        self.get_logger().info(f'[GOAL] Publishing path to MPC: {len(path.poses)} poses')
-        self._mpc_goal_active = True
-        self._mpc_goal_reached = False
-        self._mpc_goal_submitted_at = time.time()
-        self.mpc_path_pub.publish(path)
+            self.get_logger().error(f'[GOAL] goToPose raised: {e!r}')
+            self._nav_goal_active = False
+            return
+        self._nav_goal_active = True
+        self._nav_last_reached = False
+        self._nav_goal_submitted_at = time.time()
 
     def _mpc_is_complete(self) -> bool:
-        return (not self._mpc_goal_active) or self._mpc_goal_reached
+        if not self._nav_goal_active:
+            return True
+        try:
+            done = self.nav.isTaskComplete()
+        except Exception as e:
+            self.get_logger().warn(f'[NAV] isTaskComplete raised: {e!r}')
+            return False
+        if not done:
+            return False
+        self._nav_goal_active = False
+        try:
+            result = self.nav.getResult()
+        except Exception:
+            result = None
+        self._nav_last_reached = (result == TaskResult.SUCCEEDED)
+        if self._nav_last_reached:
+            self.get_logger().info('[NAV] Goal reached')
+        else:
+            self.get_logger().warn(f'[NAV] Goal ended: {result}')
+        return True
 
     def _tiles_of_color(self, color):
         out = []
@@ -520,15 +504,33 @@ class MissionManagerNode(Node):
     def _tick_exploring(self):
         if self.sweep_idx >= len(self.sweep_waypoints):
             return
+        if not self._nav_ready:
+            try:
+                ready = self.nav.nav_to_pose_client.wait_for_server(timeout_sec=0.0)
+            except Exception:
+                ready = False
+            if not ready:
+                self.get_logger().info(
+                    '[TICK] Waiting for Nav2 action server...',
+                    throttle_duration_sec=2.0)
+                return
+            self._nav_ready = True
+            self.get_logger().info('Nav2 action server up.')
         if not self._initial_goal_sent:
+            if not self._have_odom:
+                self.get_logger().info(
+                    '[TICK] Waiting for odometry before sending first goal...',
+                    throttle_duration_sec=2.0)
+                return
             self.get_logger().info(
-                f'[TICK] Sending INITIAL exploration goal. '
+                f'[TICK] Sending INITIAL exploration goal from '
+                f'({self.robot_x:.2f},{self.robot_y:.2f}). '
                 f'Total waypoints={len(self.sweep_waypoints)}')
             self._initial_goal_sent = True
             self._enter_exploring()
             return
         if self._mpc_is_complete():
-            if self._mpc_goal_reached:
+            if self._nav_last_reached:
                 self.get_logger().info(f'[TICK] Sweep waypoint {self.sweep_idx} reached.')
                 if self.grid_mode and self._cell_reached_at is None:
                     self._cell_reached_at = time.time()
@@ -559,18 +561,18 @@ class MissionManagerNode(Node):
 
     def _tick_execute_tag_turn(self):
         if self._mpc_is_complete():
-            self.get_logger().info(f'Tag turn done (reached={self._mpc_goal_reached}), resuming EXPLORING.')
+            self.get_logger().info(f'Tag turn done (reached={self._nav_last_reached}), resuming EXPLORING.')
             self._pending_tag_cmd = None
             self._transition(EXPLORING)
 
     def _tick_follow_color(self, color):
         if self._mpc_is_complete():
-            self.get_logger().info(f'Follow-{color} done (reached={self._mpc_goal_reached}), resuming EXPLORING.')
+            self.get_logger().info(f'Follow-{color} done (reached={self._nav_last_reached}), resuming EXPLORING.')
             self._transition(EXPLORING)
 
     def _tick_going_to_stop_zone(self):
         if self._mpc_is_complete():
-            self.get_logger().info(f'Stop-zone arrival (reached={self._mpc_goal_reached}).')
+            self.get_logger().info(f'Stop-zone arrival (reached={self._nav_last_reached}).')
             self._transition(HALTED)
 
 

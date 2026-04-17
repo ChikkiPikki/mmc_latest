@@ -29,7 +29,6 @@ setup(
             'tile_detector_node = mini_r1_v1_round3.nodes.tile_detector_node:main',
             'mission_manager_node = mini_r1_v1_round3.nodes.mission_manager_node:main',
             'nav_diagnostic_node = mini_r1_v1_round3.nodes.nav_diagnostic_node:main',
-            'mpc_tracker_node = mini_r1_v1_round3.nodes.mpc_tracker_node:main',
             'logo_detector_node = mini_r1_v1_round3.nodes.logo_detector_node:main',
         ],
     },
