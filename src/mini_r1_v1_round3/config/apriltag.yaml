@@ -1,0 +1,15 @@
+apriltag:
+  ros__parameters:
+    use_sim_time: true
+    image_transport: raw
+    family: 36h11
+    size: 0.12
+    max_hamming: 0
+    z_up: true
+    detector:
+      threads: 2
+      decimate: 1.0
+      blur: 0.0
+      refine: 1
+      sharpening: 0.25
+      debug: 0

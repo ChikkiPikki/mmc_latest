@@ -43,6 +43,7 @@ run() {
         --volume /tmp/.X11-unix:/tmp/.X11-unix:rw \
         --volume "${SCRIPT_DIR}/src:/home/dev/ros2_ws/src" \
         --volume "${SCRIPT_DIR}/dataset:/home/dev/dataset" \
+        --volume "${SCRIPT_DIR}/grid_world_hackathon:/home/dev/grid_world_hackathon" \
         --device /dev/dri \
         ${render_gid} \
         "${IMAGE_NAME}"

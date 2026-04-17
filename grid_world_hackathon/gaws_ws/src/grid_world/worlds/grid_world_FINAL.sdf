@@ -15,6 +15,8 @@
             name="ignition::gazebo::systems::Sensors">
       <render_engine>ogre2</render_engine>
     </plugin>
+    <plugin filename="ignition-gazebo-imu-system"
+            name="ignition::gazebo::systems::Imu"/>
     <scene>
       <ambient>1 1 1 1</ambient>
       <background>0.9 0.9 0.9 1</background>
@@ -57,8 +59,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r0_c0.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r0_c0.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r0_c0.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r0_c0.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -75,8 +77,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r0_c1.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r0_c1.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r0_c1.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r0_c1.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -93,8 +95,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r0_c2.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r0_c2.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r0_c2.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r0_c2.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -111,8 +113,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r0_c3.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r0_c3.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r0_c3.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r0_c3.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -129,8 +131,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r1_c0.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r1_c0.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r1_c0.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r1_c0.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -147,8 +149,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r1_c1.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r1_c1.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r1_c1.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r1_c1.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -165,8 +167,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r1_c2.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r1_c2.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r1_c2.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r1_c2.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -183,8 +185,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r1_c3.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r1_c3.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r1_c3.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r1_c3.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -201,8 +203,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r2_c0.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r2_c0.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r2_c0.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r2_c0.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -219,8 +221,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r2_c1.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r2_c1.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r2_c1.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r2_c1.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -237,8 +239,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r2_c2.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r2_c2.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r2_c2.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r2_c2.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -255,8 +257,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r2_c3.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r2_c3.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r2_c3.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r2_c3.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -273,8 +275,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r3_c0.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r3_c0.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r3_c0.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r3_c0.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -291,8 +293,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r3_c1.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r3_c1.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r3_c1.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r3_c1.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -309,8 +311,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r3_c2.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r3_c2.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r3_c2.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r3_c2.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -327,8 +329,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r3_c3.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r3_c3.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r3_c3.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r3_c3.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -345,8 +347,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r4_c0.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r4_c0.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r4_c0.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r4_c0.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -363,8 +365,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r4_c1.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r4_c1.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r4_c1.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r4_c1.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -381,8 +383,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r4_c2.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r4_c2.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r4_c2.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r4_c2.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -399,8 +401,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r4_c3.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/tile_r4_c3.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/tile_r4_c3.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/tile_r4_c3.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -580,8 +582,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/apriltags/tag_0_padded.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/apriltags/tag_0_padded.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/apriltags/tag_0_padded.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/apriltags/tag_0_padded.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -599,8 +601,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/apriltags/tag_1_padded.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/apriltags/tag_1_padded.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/apriltags/tag_1_padded.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/apriltags/tag_1_padded.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -618,8 +620,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/apriltags/tag_2_padded.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/apriltags/tag_2_padded.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/apriltags/tag_2_padded.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/apriltags/tag_2_padded.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -637,8 +639,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/apriltags/tag_3_padded.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/apriltags/tag_3_padded.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/apriltags/tag_3_padded.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/apriltags/tag_3_padded.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>
@@ -656,8 +658,8 @@
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
             <pbr><metal>
-              <albedo_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/apriltags/tag_4_padded.png</albedo_map>
-              <emissive_map>/home/skullz/ros_ws/gaws_ws/src/grid_world/materials/textures/apriltags/tag_4_padded.png</emissive_map>
+              <albedo_map>model://grid_world/materials/textures/apriltags/tag_4_padded.png</albedo_map>
+              <emissive_map>model://grid_world/materials/textures/apriltags/tag_4_padded.png</emissive_map>
             </metal></pbr>
             <emissive>1 1 1 1</emissive>
           </material>

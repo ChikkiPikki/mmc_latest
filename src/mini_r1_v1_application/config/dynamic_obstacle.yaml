@@ -1,7 +1,0 @@
-dynamic_obstacle_node:
-  ros__parameters:
-    use_sim_time: true
-    # World name must match the <world name="..."> in the generated SDF.
-    # The RMF building map generator uses the building YAML filename stem.
-    # With active_world.building.yaml, this becomes "active_world".
-    world_name: "active_world"

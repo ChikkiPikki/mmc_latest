@@ -107,6 +107,18 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         python3-fiona \
         python3-ignition-math6
 
+# ── Group 6: Round 3 deps (SLAM, Nav2, AprilTag, localization) ──────────
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-slam-toolbox \
+        ros-humble-navigation2 \
+        ros-humble-nav2-bringup \
+        ros-humble-nav2-simple-commander \
+        ros-humble-apriltag-ros \
+        ros-humble-apriltag-msgs \
+        ros-humble-robot-localization
+
 # ── Python pip packages (cached between builds) ─────────────────────────
 COPY requirements.txt /tmp/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
