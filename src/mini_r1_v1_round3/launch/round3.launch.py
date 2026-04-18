@@ -22,7 +22,7 @@ def generate_launch_description():
 
     grid_world_root = os.environ.get(
         'GRID_WORLD_ROOT',
-        '/home/tanay/ros2_ws/grid_world_hackathon/gaws_ws/src/grid_world',
+        '/home/dev/grid_world_hackathon/gaws_ws/src/grid_world',
     )
     grid_world_worlds = os.path.join(grid_world_root, 'worlds')
     grid_world_parent = os.path.dirname(grid_world_root)
