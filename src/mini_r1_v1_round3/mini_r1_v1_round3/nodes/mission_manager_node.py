@@ -18,7 +18,8 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from std_msgs.msg import String, Empty, Int32MultiArray, Bool
 from nav_msgs.msg import Odometry, OccupancyGrid, Path
-from geometry_msgs.msg import PoseArray, PoseStamped, Pose, Twist
+from geometry_msgs.msg import PoseArray, PoseStamped, Pose, Twist, Point
+from visualization_msgs.msg import Marker, MarkerArray
 import tf2_ros
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 
@@ -142,6 +143,25 @@ class MissionManagerNode(Node):
 
         self.state_pub = self.create_publisher(String, '/mission/state', 10)
         self.ended_pub = self.create_publisher(Empty, '/mission_ended', 1)
+        # Diagnostic overlay: POI spheres for every action waypoint we
+        # compute (tag 1 A/B, tag 2), buffered tag sightings, and the
+        # world/odom axes for orientation. Transient-local so late RViz
+        # subscribers pick up the full overlay immediately.
+        poi_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.poi_pub = self.create_publisher(
+            MarkerArray, '/mission/poi', poi_qos)
+        # logical_id -> list of ('A'|'B'|'GOAL', x, y, yaw, color_rgb)
+        self._action_poi: dict[int, list[tuple]] = {}
+        # (x, y, z) of any buffered tag sightings we've stored in the
+        # logo_detector but not acted on yet. Keyed by logical_id.
+        self._buffered_tag_poi: dict[int, tuple[float, float, float]] = {}
+        # Transient-local QoS means a fresh RViz instantly gets the full
+        # overlay; we only need to republish on state change, not on a
+        # timer. (Old 1 Hz timer was contributing to the RTF drop.)
 
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
@@ -234,8 +254,8 @@ class MissionManagerNode(Node):
         # GOAL_PROGRESS_WINDOW_S, we abandon the waypoint (it's either
         # unreachable given the current map, or Nav2 is looping).
         self._goal_dist_history: deque[tuple[float, float]] = deque(maxlen=200)
-        self.GOAL_PROGRESS_WINDOW_S = 5.0
-        self.GOAL_PROGRESS_MIN_M = 0.10
+        self.GOAL_PROGRESS_WINDOW_S = 8.0
+        self.GOAL_PROGRESS_MIN_M = 0.05
         self._spin_triggers = deque()
 
         # ── Visited-waypoint tracking (anti-backtrack) ──────────────────
@@ -246,6 +266,12 @@ class MissionManagerNode(Node):
         # which would invalidate index-based tracking. Any waypoint whose
         # position matches is excluded from future goal selection.
         self._visited_positions: set[tuple[int, int]] = set()
+        # Every goal we've ever dispatched to Nav2 (quantised to 20 cm
+        # so near-duplicates count as the same point). Frontier picker
+        # skips anything in here so we never re-target a spot we've
+        # already committed to, even if the bot failed to actually reach
+        # it. Reset only explicitly.
+        self._tried_waypoints: set[tuple[int, int]] = set()
         self.WAYPOINT_VISIT_RADIUS_M = 0.35  # ~half a 0.9m tile
 
         # ── Frontier exploration ───────────────────────────────────────
@@ -256,7 +282,7 @@ class MissionManagerNode(Node):
         self.FRONTIER_FREE_MAX = 20            # occupancy ≤ → "free"
         self.FRONTIER_OCC_MIN = 65             # occupancy ≥ → "occupied"
         self.FRONTIER_MIN_CLUSTER = 4          # cells, filters noise
-        self.FRONTIER_BLACKLIST_RADIUS_M = 0.5 # centroid skip radius
+        self.FRONTIER_BLACKLIST_RADIUS_M = 0.30 # centroid skip radius
         self.FRONTIER_NEAR_OBSTACLE_CELLS = 1  # inflate away this many cells
         # Reachable-waypoint tuning. We pick cells that sit in already-mapped
         # free space with enough clearance for the robot (so Nav2 has a
@@ -267,7 +293,10 @@ class MissionManagerNode(Node):
         # picked cells too close to walls (stall inside narrow passages)
         # and too close to the robot (bot "reached" instantly, burned time
         # on re-planning instead of driving).
-        self.REACH_MIN_CLEARANCE_M = 0.28      # free-cell must be ≥ this from nearest wall
+        # Waypoints must sit inside open space but not too deep — the
+        # tighter this, the fewer candidates. Footprint half-diag ~0.23 m,
+        # Nav2 inflation 0.06 m, plus small safety margin.
+        self.REACH_MIN_CLEARANCE_M = 0.32      # free-cell must be ≥ this from nearest wall
         self.REACH_MAX_UNKNOWN_DIST_M = 1.20   # and ≤ this from nearest unknown cell
         self.REACH_STRIDE_M = 0.25             # down-sample candidate grid to this spacing
         self.REACH_MIN_GOAL_DIST_M = 0.60      # skip candidates closer than this to robot
@@ -294,6 +323,9 @@ class MissionManagerNode(Node):
         # time to grow (slam_toolbox scan-matching, bot drifting slightly).
         self._next_frontier_retry_at = 0.0
         self.FRONTIER_IDLE_RETRY_S = 2.0
+        # Filled by _detect_frontiers each call. Printed on idle so the
+        # user can see WHY no frontier was returned.
+        self._last_frontier_stats: dict = {}
 
         # ── cmd_vel tap (for diagnostics only) ──────────────────────────
         self._last_cmd = (0.0, 0.0)
@@ -441,14 +473,26 @@ class MissionManagerNode(Node):
         tx, ty, _tz = tag_pos
         self._tag1_pos = (tx, ty)
         self._pause_exploration_for_action('TAG1')
-        self._action_next_goal = (tx - 0.5, ty, math.radians(90.0))
+        goal_a = (tx - 0.5, ty, math.radians(90.0))
+        goal_b = (tx - 0.5, ty + 1.5, math.radians(90.0))
+        self._action_poi[1] = [
+            ('A',    goal_a[0], goal_a[1], goal_a[2], (0.15, 0.60, 1.0)),
+            ('B',    goal_b[0], goal_b[1], goal_b[2], (0.15, 0.60, 1.0)),
+        ]
+        self._publish_poi_markers()
+        self._action_next_goal = goal_a
         self._transition(TAG1_GOAL_A)
 
     def _enter_tag2_flow(self, tag_pos: tuple[float, float, float]):
         tx, ty, _tz = tag_pos
         self._tag2_pos = (tx, ty)
         self._pause_exploration_for_action('TAG2')
-        self._action_next_goal = (tx, ty - 1.5, 0.0)
+        goal = (tx, ty - 1.5, 0.0)
+        self._action_poi[2] = [
+            ('GOAL', goal[0], goal[1], goal[2], (1.0, 0.7, 0.1)),
+        ]
+        self._publish_poi_markers()
+        self._action_next_goal = goal
         self._transition(TAG2_GOAL)
 
     def _pause_exploration_for_action(self, tag_label: str):
@@ -561,19 +605,12 @@ class MissionManagerNode(Node):
                 return True
         return False
 
-    def _detect_frontiers(self) -> list[tuple[float, float, float, float, float]]:
-        """Return exploration-candidate waypoints derived purely from the SLAM
-        occupancy grid + the robot's trajectory. No arena bounds, no tile
-        grid, nothing hardcoded. A candidate is a cell that is:
-
-          - free (not an obstacle, not unknown),
-          - at least REACH_MIN_CLEARANCE_M from the nearest wall (reachable),
-          - more than VISITED_RADIUS_M from any cell the robot has been in
-            (never physically occupied),
-          - within REACH_MAX_UNKNOWN_DIST_M of an unknown cell (so visiting
-            it will reveal new map — keeps the behavior exploration-based).
-
-        Returns tuples (wx, wy, clearance_m, dist_to_unknown_m, dist_from_traj_m).
+    def _detect_frontiers(self) -> list[tuple[float, float]]:
+        """Classic frontier picker: return every free cell that is adjacent
+        to an unknown cell, has at least REACH_MIN_CLEARANCE_M of wall
+        clearance, hasn't already been driven near, and hasn't already
+        been dispatched as a goal. Kept deliberately simple — one mask
+        op, one distance transform, one roll-shift to find the boundary.
         """
         m = self._map
         if m is None:
@@ -590,110 +627,87 @@ class MissionManagerNode(Node):
         free_mask    = ((grid >= 0) & (grid <= self.FRONTIER_FREE_MAX)).astype(np.uint8)
         occ_mask     = (grid >= self.FRONTIER_OCC_MIN).astype(np.uint8)
         unknown_mask = (grid < 0).astype(np.uint8)
-        if free_mask.sum() == 0:
+        if free_mask.sum() == 0 or unknown_mask.sum() == 0:
             return []
 
+        # Frontier = free cell with any 4-neighbour unknown. Compute the
+        # "unknown-adjacent" mask by OR-ing the unknown mask shifted in
+        # each cardinal direction.
+        u_up    = np.zeros_like(unknown_mask); u_up[:-1, :]  = unknown_mask[1:, :]
+        u_down  = np.zeros_like(unknown_mask); u_down[1:, :]  = unknown_mask[:-1, :]
+        u_left  = np.zeros_like(unknown_mask); u_left[:, :-1] = unknown_mask[:, 1:]
+        u_right = np.zeros_like(unknown_mask); u_right[:, 1:] = unknown_mask[:, :-1]
+        adj_unknown = (u_up | u_down | u_left | u_right).astype(np.uint8)
+
+        # Clearance check keeps the goal navigable after Nav2 inflation.
         dist_obs_m = cv2.distanceTransform(1 - occ_mask, cv2.DIST_L2, 3) * res
-        if unknown_mask.sum() > 0:
-            dist_unk_m = cv2.distanceTransform(1 - unknown_mask, cv2.DIST_L2, 3) * res
-        else:
-            dist_unk_m = np.full((h, w), 1e6, dtype=np.float32)
 
-        # Unknown density: count of unknown cells in a sensor-radius window
-        # around each cell. Waypoints with a LOT of unknown around them are
-        # worth much more than waypoints next to a tiny isolated pocket.
-        density_win = max(1, int(round(self.UNKNOWN_DENSITY_RADIUS_M / res)))
-        k = 2 * density_win + 1
-        # cv2.boxFilter sums over the window; scale back to "count".
-        unknown_density = cv2.boxFilter(
-            unknown_mask.astype(np.float32), ddepth=-1,
-            ksize=(k, k), normalize=False,
-        )
-
-        # Rasterise the robot's trajectory into this grid.
-        traj_mask = np.zeros((h, w), dtype=np.uint8)
-        for kx, ky in self._visited_positions:
-            wx = kx / 20.0
-            wy = ky / 20.0
-            cx = int((wx - ox) / res)
-            cy = int((wy - oy) / res)
-            if 0 <= cx < w and 0 <= cy < h:
-                traj_mask[cy, cx] = 1
-        if traj_mask.sum() > 0:
-            dist_traj_m = cv2.distanceTransform(1 - traj_mask, cv2.DIST_L2, 3) * res
-        else:
-            dist_traj_m = np.full((h, w), 1e6, dtype=np.float32)
-
-        min_clear = self.REACH_MIN_CLEARANCE_M
-        max_unk   = self.REACH_MAX_UNKNOWN_DIST_M
-        visited_r = self.VISITED_RADIUS_M
-
-        cand_mask = (
-            (free_mask > 0) &
-            (dist_obs_m >= min_clear) &
-            (dist_traj_m > visited_r) &
-            (dist_unk_m <= max_unk)
-        )
-        if not cand_mask.any():
+        frontier_mask = (free_mask > 0) & (adj_unknown > 0) & (dist_obs_m >= self.REACH_MIN_CLEARANCE_M)
+        if not frontier_mask.any():
             return []
 
-        stride = max(1, int(round(self.REACH_STRIDE_M / res)))
-        ys, xs = np.where(cand_mask)
-        keys = (ys // stride) * (w // max(1, stride) + 1) + (xs // stride)
-        _, uniq = np.unique(keys, return_index=True)
-        xs = xs[uniq]; ys = ys[uniq]
-
-        cands: list[tuple[float, float, float, float, float, float]] = []
+        ys, xs = np.where(frontier_mask)
+        raw_cells = len(ys)
+        cands: list[tuple[float, float]] = []
+        rx_now, ry_now = self._map_xy()
+        min_d2 = self.REACH_MIN_GOAL_DIST_M ** 2
+        rej_near = rej_halo = rej_tried = 0
         for cx, cy in zip(xs.tolist(), ys.tolist()):
             wx = ox + (cx + 0.5) * res
             wy = oy + (cy + 0.5) * res
-            cands.append((
-                wx, wy,
-                float(dist_obs_m[cy, cx]),
-                float(dist_unk_m[cy, cx]),
-                float(dist_traj_m[cy, cx]),
-                float(unknown_density[cy, cx]),
-            ))
+            if (wx - rx_now) ** 2 + (wy - ry_now) ** 2 < min_d2:
+                rej_near += 1
+                continue
+            if self._frontier_blacklisted(wx, wy):
+                rej_halo += 1
+                continue
+            qkey = (int(round(wx * 5.0)), int(round(wy * 5.0)))
+            if qkey in self._tried_waypoints:
+                rej_tried += 1
+                continue
+            cands.append((wx, wy))
+        # Loud diagnostic so when the bot sits idle we can see exactly
+        # which filter is eating the candidates.
+        self._last_frontier_stats = {
+            'raw_cells': raw_cells,
+            'rej_near': rej_near,
+            'rej_halo': rej_halo,
+            'rej_tried': rej_tried,
+            'kept': len(cands),
+        }
         return cands
 
     def _select_frontier(self) -> tuple[float, float, float] | None:
-        """Pick the lowest-cost exploration waypoint. Strong preference for
-        waypoints with HIGH local unknown density (lots of new map to reveal
-        if we go there) and high clearance (so RPP can sprint through).
+        """Pick a frontier cell using a stable normalized scoring:
+          fwd_align  = cos(angle between heading and goal) ∈ [-1, +1]
+          cost       = d − 2.5 · fwd_align · max(d, 1.0)
 
-        Cost (lower is better):
-          0.5 * d_rob           — still discourage far drives so we don't
-                                  constantly reach for the edge of the arena.
-          -2.0 * unknown_density_norm
-                                 — DOMINANT term: where is the most unknown?
-          -0.4 * d_traj         — novelty bonus.
-          -0.6 * clearance      — prefer wide-open cells.
-        """
+        Multiplying fwd_align by max(d, 1) prevents small-distance noise
+        from flipping the winner between ticks (the raw-projection
+        version swung cost by only ±1.2 m at d≈0.6, so map updates
+        could change the pick). Large-d forward cells still win by a
+        big margin, small-d near-behind cells still lose."""
         cands = self._detect_frontiers()
         if not cands:
             return None
         rx, ry = self._map_xy()
-        # Normalize unknown_density by the max we saw so it's on the same
-        # scale as the other metrics (0..1-ish).
-        max_density = max((c[5] for c in cands), default=1.0)
-        if max_density <= 0.0:
-            max_density = 1.0
+        ryaw = self._map_yaw()
+        hx = math.cos(ryaw)
+        hy = math.sin(ryaw)
 
         best = None
         best_cost = math.inf
-        min_d = self.REACH_MIN_GOAL_DIST_M
-        for wx, wy, clearance, _d_unk, d_traj, density in cands:
-            d_rob = math.hypot(wx - rx, wy - ry)
-            if d_rob < min_d:
+        for wx, wy in cands:
+            dx = wx - rx
+            dy = wy - ry
+            d = math.hypot(dx, dy)
+            if d < 1e-3:
                 continue
-            density_norm = density / max_density
-            cost = (0.5 * d_rob
-                    - 2.0 * density_norm * 5.0   # scale normalised density up
-                    - 0.4 * d_traj
-                    - 0.6 * clearance)
+            fwd_align = (dx * hx + dy * hy) / d   # normalized projection
+            cost = d - 2.5 * fwd_align * max(d, 1.0)
             if cost < best_cost:
                 best_cost = cost
-                best = (wx, wy, clearance)
+                best = (wx, wy, fwd_align)
         return best
 
     def _on_tag_positions(self, msg: String):
@@ -769,6 +783,10 @@ class MissionManagerNode(Node):
 
     def _send_goal(self, x, y, yaw):
         self._current_goal = (x, y, yaw)
+        # Burn the target into the "tried" set so the frontier picker
+        # never re-offers it. Even if the bot fails to reach it we move
+        # on to a different boundary cell next time.
+        self._tried_waypoints.add((int(round(x * 5.0)), int(round(y * 5.0))))
         # Reset both watchdog histories — this is a fresh goal. Without
         # this the stall watchdog instantly fires on the new goal using
         # odometry from BEFORE dispatch (while the robot was sitting
@@ -779,14 +797,16 @@ class MissionManagerNode(Node):
             self.get_logger().info(
                 f'[GOAL] paused — storing ({x:.2f},{y:.2f}) for resume, not dispatching')
             return
+        rx, ry = self._map_xy()
+        d = math.hypot(x - rx, y - ry)
         self.get_logger().info(
-            f'[GOAL] goToPose ({x:.2f}, {y:.2f}, yaw={math.degrees(yaw):.1f}°) '
-            f'from robot=({self.robot_x:.2f}, {self.robot_y:.2f})')
+            f'[FLOW] DISPATCH goal=({x:+.2f},{y:+.2f},{math.degrees(yaw):+.0f}°) '
+            f'd={d:.2f}m')
         goal_ps = self._make_pose_stamped(x, y, yaw)
         try:
             self.nav.goToPose(goal_ps)
         except Exception as e:
-            self.get_logger().error(f'[GOAL] goToPose raised: {e!r}')
+            self.get_logger().error(f'[FLOW] goToPose raised: {e!r}')
             self._nav_goal_active = False
             return
         self._nav_goal_active = True
@@ -821,10 +841,12 @@ class MissionManagerNode(Node):
                 self._send_goal(x, y, yaw)
             return False
         self._nav_last_reached = (result == TaskResult.SUCCEEDED)
+        rx, ry = self._map_xy()
         if self._nav_last_reached:
-            self.get_logger().info('[NAV] Goal reached')
+            self.get_logger().info(
+                f'[FLOW] ARRIVED at=({rx:+.2f},{ry:+.2f})')
         else:
-            self.get_logger().warn(f'[NAV] Goal ended: {result}')
+            self.get_logger().warn(f'[FLOW] FAILED result={result}')
         return True
 
     def _tiles_of_color(self, color):
@@ -885,82 +907,54 @@ class MissionManagerNode(Node):
         self._last_map_odom = (tx, ty, yaw)
 
     def _idle_watchdog(self):
-        # Verbose: log the exact reason each tick so you can see why
-        # recovery did or did not fire.
-        reason = None
+        # Silent skip for uninteresting cases — state logs already cover
+        # STOP_AT_TAG/HALTED/etc and a noisy [WATCHDOG] skip on every
+        # tick was drowning the log.
         if self.state in (STOP_AT_TAG, HALTED, LOOKING_FOR_TAG2):
-            reason = f'state={self.state}'
-        elif self._paused:
-            reason = 'paused'
-        elif self._recovery_active:
-            reason = 'recovery in progress'
-        elif not self._nav_goal_active:
-            reason = 'no active nav goal'
-        elif not self._have_odom:
-            reason = 'no odom yet'
-        if reason is not None:
-            self.get_logger().info(
-                f'[WATCHDOG] skip ({reason})', throttle_duration_sec=5.0)
             return
-
+        if self._paused or self._recovery_active or not self._have_odom:
+            return
+        if not self._nav_goal_active:
+            return
         now = time.time()
         cutoff = now - self.idle_watchdog_s
         while self._odom_history and self._odom_history[0][0] < cutoff:
             self._odom_history.popleft()
         if len(self._odom_history) < 2:
-            self.get_logger().info(
-                '[WATCHDOG] skip (window too short — just dispatched)',
-                throttle_duration_sec=5.0)
             return
         oldest = self._odom_history[0]
         dx = self.robot_x - oldest[1]
         dy = self.robot_y - oldest[2]
         moved = math.hypot(dx, dy)
-        # Yaw-change over the window. Short-circuits the stall check
-        # while the controller is intentionally rotating in place
-        # (RPP's rotate-to-heading phase before forward motion).
         oldest_yaw = oldest[3] if len(oldest) > 3 else self.robot_yaw
         dyaw = abs(math.atan2(math.sin(self.robot_yaw - oldest_yaw),
                               math.cos(self.robot_yaw - oldest_yaw)))
         window = now - oldest[0]
-        self.get_logger().info(
-            f'[WATCHDOG] window={window:.1f}s moved={moved*100:.1f}cm '
-            f'|dyaw|={math.degrees(dyaw):.1f}° samples={len(self._odom_history)}',
-            throttle_duration_sec=2.0)
-        # If robot has rotated ≥ ~17° in the window, count as progress:
-        # it's aligning to heading, not stuck.
         if dyaw > 0.30 and moved < 0.05:
-            return
+            return  # actively rotating — not stuck
         if moved < 0.05 and dyaw < 0.10:
+            # Don't trigger recovery while we're within the final-approach
+            # zone (~2× xy_goal_tolerance). Nav2 is allowed to jiggle the
+            # last 30 cm; abandoning here yanks the controller off a
+            # goal it's almost reached and sends us to a nonsense escape
+            # waypoint behind the bot.
+            if self._current_goal is not None:
+                gx, gy, _ = self._current_goal
+                rx, ry = self._map_xy()
+                if math.hypot(gx - rx, gy - ry) < 0.35:
+                    return
             self.get_logger().warn(
-                f'[WATCHDOG] STALLED — moved {moved*100:.1f}cm, '
-                f'|dyaw|={math.degrees(dyaw):.1f}° in {window:.1f}s. '
-                f'Triggering escape recovery.')
+                f'[FLOW] STALLED — moved {moved*100:.1f}cm, '
+                f'|dyaw|={math.degrees(dyaw):.1f}° in {window:.1f}s → escape')
             self._trigger_backup_recovery()
             return
 
-        # Goal-progress watchdog. Only abandon if the robot is driving
-        # forward but not closing distance — not while it's aligning.
-        if self._current_goal is None or self._recovery_active:
-            return
-        if dyaw > 0.20:
-            # Still turning to face the goal — give it time.
-            return
-        gdc = now - self.GOAL_PROGRESS_WINDOW_S
-        while self._goal_dist_history and self._goal_dist_history[0][0] < gdc:
-            self._goal_dist_history.popleft()
-        if len(self._goal_dist_history) >= 2:
-            d_start = self._goal_dist_history[0][1]
-            d_now   = self._goal_dist_history[-1][1]
-            progress = d_start - d_now
-            if progress < self.GOAL_PROGRESS_MIN_M:
-                gx, gy, _ = self._current_goal
-                self.get_logger().warn(
-                    f'[WATCHDOG] NO-PROGRESS — dist_to_goal '
-                    f'{d_start:.2f}m → {d_now:.2f}m (Δ={progress*100:+.1f}cm) '
-                    f'over {self.GOAL_PROGRESS_WINDOW_S:.1f}s; abandoning '
-                    f'waypoint ({gx:+.2f},{gy:+.2f}) and re-selecting')
-                self._abandon_current_goal()
+        # Goal-progress watchdog DISABLED. It was firing when the bot was
+        # actually making forward progress (7 cm in 5 s while navigating
+        # a tight turn), yanking goals out from under a CPU-overloaded
+        # controller and leaving the bot spinning at an unreachable
+        # escape point. Nav2's own timeout + the full-stall check above
+        # is enough to recover from genuinely bad goals.
 
     def _abandon_current_goal(self):
         """Cancel Nav2, mark the current waypoint as visited (so the
@@ -991,40 +985,28 @@ class MissionManagerNode(Node):
         self._last_cmd_stamp = time.time()
         self._cmd_count += 1
 
-    # ── Periodic nav status summary ─────────────────────────────────────
+    # ── Periodic flow summary (one concise line per 3 s) ────────────────
     def _nav_diag(self):
-        if not self._nav_goal_active and not self._paused:
+        # Compact single-line state view. Only prints when something
+        # is actually happening; silent when paused / fully idle.
+        if not (self._nav_goal_active or self._paused or self._recovery_active):
             return
-        gx, gy = (self._current_goal[0], self._current_goal[1]) \
-            if self._current_goal else (float('nan'), float('nan'))
-        dist = math.hypot(gx - self.robot_x, gy - self.robot_y) \
-            if self._current_goal else float('nan')
-        now = time.time()
-        cmd_age = now - self._last_cmd_stamp if self._last_cmd_stamp else float('inf')
-        # recent displacement (last 4s)
-        cutoff = now - self.idle_watchdog_s
-        recent_samples = [s for s in self._odom_history if s[0] >= cutoff]
-        if len(recent_samples) >= 2:
-            dx = self.robot_x - recent_samples[0][1]
-            dy = self.robot_y - recent_samples[0][2]
-            recent_moved = math.hypot(dx, dy)
-            window = now - recent_samples[0][0]
-        else:
-            recent_moved = 0.0
-            window = 0.0
+        if self._current_goal is None:
+            return
+        gx, gy, _gyaw = self._current_goal
+        rx, ry = self._map_xy()
+        dist = math.hypot(gx - rx, gy - ry)
         flags = []
-        if self._paused: flags.append('PAUSED')
-        if self._recovery_active: flags.append('RECOVERING')
+        if self._paused: flags.append('PAUSE')
+        if self._recovery_active: flags.append('RECOV')
         if self._nav_goal_active: flags.append('ACTIVE')
-        tag = ','.join(flags) if flags else 'idle'
         self.get_logger().info(
-            f'[NAV] pose=({self.robot_x:+.2f},{self.robot_y:+.2f}@'
-            f'{math.degrees(self.robot_yaw):+.0f}°) '
+            f'[FLOW] {self.state} '
+            f'bot=({rx:+.2f},{ry:+.2f}@{math.degrees(self._map_yaw()):+.0f}°) '
             f'goal=({gx:+.2f},{gy:+.2f}) d={dist:.2f}m '
-            f'cmd=({self._last_cmd[0]:+.2f},{self._last_cmd[1]:+.2f}) age={cmd_age:.1f}s '
-            f'moved_{window:.0f}s={recent_moved*100:.1f}cm '
-            f'sweep={self.sweep_idx}/{len(self.sweep_waypoints)} '
-            f'visited={len(self._visited_positions)} [{tag}]')
+            f'cmd=({self._last_cmd[0]:+.2f},{self._last_cmd[1]:+.2f}) '
+            f'[{",".join(flags)}]',
+            throttle_duration_sec=10.0)
 
     # ── Anti-backtrack: mark passed-through waypoints as visited ────────
     @staticmethod
@@ -1088,8 +1070,8 @@ class MissionManagerNode(Node):
         self._send_goal(ex, ey, yaw)
 
     def _pick_escape_waypoint(self,
-                              radius_min_m: float = 0.25,
-                              radius_max_m: float = 1.20,
+                              radius_min_m: float = 0.80,
+                              radius_max_m: float = 1.80,
                               clearance_m: float = None) -> tuple[float, float] | None:
         """Pick any free + reachable cell in an annulus around the robot.
         Prefers cells behind / to the side of the current heading (so we
@@ -1140,10 +1122,16 @@ class MissionManagerNode(Node):
                     continue
                 wx = ox + (cx + 0.5) * res
                 wy = oy + (cy + 0.5) * res
-                # Prefer cells not in front of current heading (penalize
-                # dot-product with heading direction).
-                heading_dot = (dcx * math.cos(ryaw) + dcy * math.sin(ryaw))
-                cost = heading_dot * 0.5 - dist_obs_m[cy, cx]
+                d_m = math.hypot(dcx, dcy) * res
+                # Reject cells whose direction would require a >120° turn
+                # from current heading. The stuck controller CAN'T
+                # execute a u-turn — better to return None and let the
+                # caller fall back to just stopping.
+                if d_m > 1e-3:
+                    heading_cos = (dcx * math.cos(ryaw) + dcy * math.sin(ryaw)) / (d_m / res)
+                    if heading_cos < -0.5:   # >120° from forward
+                        continue
+                cost = d_m - 0.5 * dist_obs_m[cy, cx]
                 if cost < best_cost:
                     best_cost = cost
                     best = (wx, wy)
@@ -1212,24 +1200,43 @@ class MissionManagerNode(Node):
             return
         rx, ry = self._map_xy()
         frontier = self._select_frontier()
+        if frontier is None and self._tried_waypoints:
+            # Second chance: every frontier cell has been blacklisted at
+            # least once. Reset the dispatched-goals memory so the bot can
+            # re-attempt goals it previously failed to reach. Trajectory
+            # halo blacklist stays — we still won't re-pick cells the bot
+            # physically drove through.
+            self.get_logger().warn(
+                f'[FRONTIER] all {len(self._tried_waypoints)} dispatched '
+                f'waypoints blacklisted — clearing tried-set and retrying')
+            self._tried_waypoints.clear()
+            frontier = self._select_frontier()
         if frontier is not None:
             x, y, score = frontier
             yaw = math.atan2(y - ry, x - rx)
             self._current_frontier = (x, y)
-            # Blacklist this centroid so we don't re-pick it while approaching.
-            self._mark_position_visited(x, y)
+            stats = self._last_frontier_stats
             self.get_logger().info(
-                f'[FRONTIER] goal=({x:+.2f},{y:+.2f}) score={score:.2f} '
-                f'from_map_pose=({rx:+.2f},{ry:+.2f})')
+                f'[FLOW] PICK frontier=({x:+.2f},{y:+.2f}) '
+                f'align={score:+.2f} bot=({rx:+.2f},{ry:+.2f}) '
+                f'kept={stats.get("kept", "?")}/{stats.get("raw_cells", "?")} '
+                f'rej(near={stats.get("rej_near", 0)},'
+                f'halo={stats.get("rej_halo", 0)},'
+                f'tried={stats.get("rej_tried", 0)})')
             self._send_goal(x, y, yaw)
             return
 
         # Fallback to sweep
         self._current_frontier = None
         have_map = self._map is not None
-        self.get_logger().info(
-            f'[ENTER_EXPLORING] no frontier (have_map={have_map}); '
-            f'falling back to sweep idx={self.sweep_idx}/{len(self.sweep_waypoints)}')
+        stats = self._last_frontier_stats
+        self.get_logger().warn(
+            f'[FLOW] NO FRONTIER have_map={have_map} '
+            f'raw_cells={stats.get("raw_cells", 0)} '
+            f'rej(near={stats.get("rej_near", 0)},'
+            f'halo={stats.get("rej_halo", 0)},'
+            f'tried={stats.get("rej_tried", 0)}) '
+            f'→ sweep idx={self.sweep_idx}/{len(self.sweep_waypoints)}')
         if self.sweep_idx >= len(self.sweep_waypoints):
             self.get_logger().info('[ENTER_EXPLORING] sweep exhausted too.')
             return
@@ -1407,44 +1414,16 @@ class MissionManagerNode(Node):
             self._enter_exploring()
             return
 
-        # No active goal AND no completion transition to process → idle.
-        # Periodically retry frontier selection so that a freshly-grown map
-        # can unblock exploration without waiting for an external trigger.
+        # No active goal AND no completion transition → idle. Retry the
+        # frontier pick every FRONTIER_IDLE_RETRY_S seconds — the map
+        # is still growing, previously-impossible cells may become
+        # reachable.
         if not self._nav_goal_active and not self._paused:
             now = time.time()
             if now >= self._next_frontier_retry_at:
                 self._next_frontier_retry_at = now + self.FRONTIER_IDLE_RETRY_S
-                self.get_logger().info(
-                    '[TICK] idle retry of _enter_exploring',
-                    throttle_duration_sec=5.0)
                 self._enter_exploring()
             return
-
-        # Goal is active: re-score candidate waypoints periodically. As the
-        # robot advances, new map is revealed and the best reachable-near-
-        # unknown waypoint shifts. Preempt the current goal if the new best
-        # differs enough to be worth re-planning for.
-        now = time.time()
-        if (now - self._last_goal_update_at) >= self.GOAL_UPDATE_INTERVAL_S:
-            self._last_goal_update_at = now
-            if self._current_goal is not None and not self._paused:
-                cand = self._select_frontier()
-                if cand is not None:
-                    nx, ny, _ = cand
-                    gx, gy, _gyaw = self._current_goal
-                    if math.hypot(nx - gx, ny - gy) >= self.GOAL_UPDATE_DIST_M:
-                        rx, ry = self._map_xy()
-                        yaw = math.atan2(ny - ry, nx - rx)
-                        self.get_logger().info(
-                            f'[FRONTIER↻] updating goal ({gx:+.2f},{gy:+.2f}) '
-                            f'→ ({nx:+.2f},{ny:+.2f}) as bot advanced')
-                        self._current_frontier = (nx, ny)
-                        self._mark_position_visited(nx, ny)
-                        try:
-                            self.nav.cancelTask()
-                        except Exception:
-                            pass
-                        self._send_goal(nx, ny, yaw)
 
     def _tick_stop_at_tag(self):
         if (time.time() - self._state_entered_at) < self.stop_at_tag_dwell_s:
@@ -1475,6 +1454,150 @@ class MissionManagerNode(Node):
         if self._mpc_is_complete():
             self.get_logger().info(f'Stop-zone arrival (reached={self._nav_last_reached}).')
             self._transition(HALTED)
+
+    # ── POI + world-axes RViz overlay ────────────────────────────────────
+    def _publish_poi_markers(self):
+        """Render every point-of-interest in the mission onto /mission/poi
+        as a MarkerArray. Includes the world/odom axes at the origin,
+        all current action waypoints (tag 1 A/B, tag 2 GOAL), known tag
+        positions from logo_detector, and any buffered tag sightings."""
+        arr = MarkerArray()
+        # Clear-all sentinel so old markers from previous action flows
+        # don't linger when we enter a new phase.
+        clear = Marker()
+        clear.header.frame_id = 'odom'
+        clear.ns = 'mission_poi'
+        clear.action = Marker.DELETEALL
+        arr.markers.append(clear)
+
+        now = self.get_clock().now().to_msg()
+
+        # 1) World / odom axes at the origin — X red, Y green, Z blue.
+        for i, (vx, vy, vz, rr, gg, bb, label) in enumerate([
+            (1.0, 0.0, 0.0, 1.0, 0.1, 0.1, '+X'),
+            (0.0, 1.0, 0.0, 0.1, 1.0, 0.1, '+Y'),
+            (0.0, 0.0, 1.0, 0.1, 0.3, 1.0, '+Z'),
+        ]):
+            a = Marker()
+            a.header.frame_id = 'odom'
+            a.header.stamp = now
+            a.ns = 'mission_poi_axes'
+            a.id = i
+            a.type = Marker.ARROW
+            a.action = Marker.ADD
+            a.points = [Pose().position, Pose().position]  # placeholder
+            p0 = Point(); p0.x = 0.0; p0.y = 0.0; p0.z = 0.0
+            p1 = Point(); p1.x = vx * 0.8; p1.y = vy * 0.8; p1.z = vz * 0.8
+            a.points = [p0, p1]
+            a.scale.x = 0.035         # shaft diameter
+            a.scale.y = 0.07          # head diameter
+            a.scale.z = 0.10          # head length
+            a.color.r = rr; a.color.g = gg; a.color.b = bb; a.color.a = 1.0
+            a.pose.orientation.w = 1.0
+            arr.markers.append(a)
+
+            t = Marker()
+            t.header.frame_id = 'odom'
+            t.header.stamp = now
+            t.ns = 'mission_poi_axes_label'
+            t.id = i
+            t.type = Marker.TEXT_VIEW_FACING
+            t.action = Marker.ADD
+            t.pose.position.x = vx * 0.9
+            t.pose.position.y = vy * 0.9
+            t.pose.position.z = vz * 0.9 + 0.05
+            t.pose.orientation.w = 1.0
+            t.scale.z = 0.12
+            t.color.r = rr; t.color.g = gg; t.color.b = bb; t.color.a = 1.0
+            t.text = label
+            arr.markers.append(t)
+
+        # 2) Known logical-tag positions — small white spheres + label.
+        for logical_id, (x, y, z) in self._tag_positions_map.items():
+            arr.markers.append(self._poi_sphere(
+                f'tag_pos', logical_id * 10, x, y, z + 0.05,
+                0.10, (0.9, 0.9, 0.9), 0.6))
+            arr.markers.append(self._poi_text(
+                f'tag_pos_label', logical_id * 10, x, y, z + 0.30,
+                f'TAG{logical_id}', (0.9, 0.9, 0.9)))
+
+        # 3) Action waypoints — colored spheres + labels + a thin arrow
+        #    pointing in the commanded yaw direction.
+        for logical_id, pois in self._action_poi.items():
+            for i, (label, x, y, yaw, col) in enumerate(pois):
+                mid = logical_id * 100 + i
+                arr.markers.append(self._poi_sphere(
+                    'action_waypoint', mid, x, y, 0.05, 0.22, col, 0.9))
+                arr.markers.append(self._poi_text(
+                    'action_waypoint_label', mid, x, y, 0.35,
+                    f'T{logical_id}·{label}', col))
+                # Direction arrow to show commanded yaw.
+                arrow = Marker()
+                arrow.header.frame_id = 'odom'
+                arrow.header.stamp = now
+                arrow.ns = 'action_waypoint_yaw'
+                arrow.id = mid
+                arrow.type = Marker.ARROW
+                arrow.action = Marker.ADD
+                p0 = Point(); p0.x = x; p0.y = y; p0.z = 0.05
+                p1 = Point()
+                p1.x = x + 0.35 * math.cos(yaw)
+                p1.y = y + 0.35 * math.sin(yaw)
+                p1.z = 0.05
+                arrow.points = [p0, p1]
+                arrow.scale.x = 0.04; arrow.scale.y = 0.08; arrow.scale.z = 0.12
+                arrow.color.r = col[0]; arrow.color.g = col[1]; arrow.color.b = col[2]
+                arrow.color.a = 0.9
+                arrow.pose.orientation.w = 1.0
+                arr.markers.append(arrow)
+
+        # 4) Buffered (pre-predecessor) tag sightings — pulsing magenta
+        #    sphere so the user can see WHERE we think the tag is even
+        #    before we're allowed to act on it.
+        for logical_id, (x, y, z) in self._buffered_tag_poi.items():
+            arr.markers.append(self._poi_sphere(
+                'buffered_tag', logical_id, x, y, z + 0.05,
+                0.14, (1.0, 0.2, 0.9), 0.7))
+            arr.markers.append(self._poi_text(
+                'buffered_tag_label', logical_id, x, y, z + 0.25,
+                f'TAG{logical_id}?', (1.0, 0.2, 0.9)))
+
+        self.poi_pub.publish(arr)
+
+    def _poi_sphere(self, ns, mid, x, y, z, diameter, rgb, alpha):
+        m = Marker()
+        m.header.frame_id = 'odom'
+        m.header.stamp = self.get_clock().now().to_msg()
+        m.ns = ns
+        m.id = int(mid)
+        m.type = Marker.SPHERE
+        m.action = Marker.ADD
+        m.pose.position.x = float(x)
+        m.pose.position.y = float(y)
+        m.pose.position.z = float(z)
+        m.pose.orientation.w = 1.0
+        m.scale.x = diameter; m.scale.y = diameter; m.scale.z = diameter
+        m.color.r = float(rgb[0]); m.color.g = float(rgb[1]); m.color.b = float(rgb[2])
+        m.color.a = float(alpha)
+        return m
+
+    def _poi_text(self, ns, mid, x, y, z, text, rgb):
+        m = Marker()
+        m.header.frame_id = 'odom'
+        m.header.stamp = self.get_clock().now().to_msg()
+        m.ns = ns
+        m.id = int(mid)
+        m.type = Marker.TEXT_VIEW_FACING
+        m.action = Marker.ADD
+        m.pose.position.x = float(x)
+        m.pose.position.y = float(y)
+        m.pose.position.z = float(z)
+        m.pose.orientation.w = 1.0
+        m.scale.z = 0.14
+        m.color.r = float(rgb[0]); m.color.g = float(rgb[1]); m.color.b = float(rgb[2])
+        m.color.a = 1.0
+        m.text = text
+        return m
 
     # ── Tag 1 / 2 gated action ticks ─────────────────────────────────────
     def _dispatch_pending_action_goal(self):

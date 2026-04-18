@@ -201,48 +201,10 @@ class TileDetectorNode(Node):
         meta_msg.data = json.dumps(meta)
         self.meta_pub.publish(meta_msg)
 
-        ma = MarkerArray()
-        for t in confirmed:
-            cube = Marker()
-            cube.header.frame_id = 'odom'
-            cube.header.stamp = now
-            cube.ns = 'tile_cubes'
-            cube.id = t['id']
-            cube.type = Marker.CUBE
-            cube.action = Marker.ADD
-            cube.pose.position.x = t['x']
-            cube.pose.position.y = t['y']
-            cube.pose.position.z = 0.025
-            cube.pose.orientation.w = 1.0
-            cube.scale.x = 0.3
-            cube.scale.y = 0.3
-            cube.scale.z = 0.05
-            r, g, b = COLOR_RGB[t['color']]
-            cube.color.r = r
-            cube.color.g = g
-            cube.color.b = b
-            cube.color.a = 0.7
-            ma.markers.append(cube)
-
-            txt = Marker()
-            txt.header.frame_id = 'odom'
-            txt.header.stamp = now
-            txt.ns = 'tile_labels'
-            txt.id = t['id']
-            txt.type = Marker.TEXT_VIEW_FACING
-            txt.action = Marker.ADD
-            txt.pose.position.x = t['x']
-            txt.pose.position.y = t['y']
-            txt.pose.position.z = 0.3
-            txt.pose.orientation.w = 1.0
-            txt.scale.z = 0.15
-            txt.color.r = 1.0
-            txt.color.g = 1.0
-            txt.color.b = 1.0
-            txt.color.a = 1.0
-            txt.text = f"T{t['id']}:{t['color'][0]}"
-            ma.markers.append(txt)
-        self.marker_pub.publish(ma)
+        # Tile cube/label markers removed — user wanted only the
+        # per-pixel /logo/points cloud visualization on the ground,
+        # no overlaid 30 cm colored plates. PoseArray + metadata are
+        # still published above for mission_manager consumption.
 
         vis = Int32MultiArray()
         vis.data = sorted(self.visited_ids)

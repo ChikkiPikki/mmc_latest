@@ -175,12 +175,17 @@ class LogoDetectorNode(Node):
         self.marker_pub    = self.create_publisher(MarkerArray,  "/logo/markers",          latched)
         self.tag_pos_pub   = self.create_publisher(String,       "/apriltag/map_positions", latched)
         self.logo_pose_pub = self.create_publisher(PoseStamped,  "/logo/pose",             latched)
-        # Cloud publishing removed entirely — the RGBD stream + the
-        # generation of a PointCloud2 every frame was contributing to
-        # the sim real-time-factor drop that caused depth/RGB sync
-        # mismatches. Ground-paint pixels are still accumulated in
-        # self._ground_paint for direction-decision logic (see
-        # get_ground_pixels() below), they just aren't visualized.
+        # Persistent ground-paint cloud so the user can SEE the detected
+        # orange / blue / green pixels on the floor in RViz. Accumulated
+        # in self._ground_paint and republished on a timer whenever new
+        # pixels have been added. Transient-local QoS = late RViz wins.
+        persistent_cloud_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.logo_cloud_pub = self.create_publisher(
+            PointCloud2, "/logo/points", persistent_cloud_qos)
         self.depth_viz_pub = self.create_publisher(Image,        "/logo/depth_viz",        10)
         self.mask_viz_pub  = self.create_publisher(Image,        "/logo/mask_viz",         10)
 
@@ -205,6 +210,9 @@ class LogoDetectorNode(Node):
         # both visualize and query by color.
         self.GROUND_PIXEL_QUANTIZE_M = 0.02
         self._ground_paint: dict[tuple[int, int], tuple[int, str, float, float]] = {}
+        self._ground_paint_dirty = False
+        # 2 Hz re-publish is plenty for a growing-set visual.
+        self.create_timer(0.5, self._publish_ground_paint)
 
         self._frame_count = 0
 
@@ -363,55 +371,14 @@ class LogoDetectorNode(Node):
 
         self._publish_depth_viz(depth, msg_depth.header.stamp)
 
-        # ── Depth diagnostics ──
-        finite = np.isfinite(depth) & (depth > 0)
-        in_range = finite & (depth >= self.min_depth) & (depth <= self.max_depth)
-        if self._frame_count <= 3 or self._frame_count % 30 == 0:
-            if finite.any():
-                dmin = float(depth[finite].min()); dmax = float(depth[finite].max())
-                dmed = float(np.median(depth[finite]))
-            else:
-                dmin = dmax = dmed = float('nan')
-            self.get_logger().info(
-                f"[DEPTH] dtype={depth_raw.dtype} shape={depth.shape} "
-                f"finite={finite.mean()*100:.1f}% in_range={in_range.mean()*100:.1f}% "
-                f"min={dmin:.2f} med={dmed:.2f} max={dmax:.2f} "
-                f"K=[fx={fx:.1f} fy={fy:.1f} cx={cx:.1f} cy={cy:.1f}] "
-                f"frame_id='{msg_rgb.header.frame_id}'"
-            )
-
         rot_t = self._lookup_cam_to_map(msg_rgb.header.frame_id,
                                         rclpy.time.Time.from_msg(msg_rgb.header.stamp))
         if rot_t[0] is None:
             return
         rot, t_vec = rot_t
 
-        if self._frame_count <= 3 or self._frame_count % 30 == 0:
-            self.get_logger().info(
-                f"[TF] map<-cam t=({t_vec[0]:.2f},{t_vec[1]:.2f},{t_vec[2]:.2f}) "
-                f"Rx=({rot[0,0]:.2f},{rot[0,1]:.2f},{rot[0,2]:.2f})"
-            )
-
         hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
-
-        # Pixels must sit near a white neighbor to count as a tile symbol.
         near_white = _white_near_mask(hsv, self.white_halo_px)
-
-        # ── HSV diagnostics ──
-        if self._frame_count % 15 == 0:
-            counts = {name: int(cv2.countNonZero(cv2.inRange(hsv, lo, hi)))
-                      for name, _, lo, hi, _, _ in COLOR_TARGETS}
-            sat_mask = hsv[:, :, 1] > 80
-            if sat_mask.any():
-                h_sat = hsv[:, :, 0][sat_mask]
-                hist, _ = np.histogram(h_sat, bins=18, range=(0, 180))
-                top = np.argsort(hist)[-5:][::-1]
-                peaks = [(int(b) * 10, int(hist[b])) for b in top if hist[b] > 50]
-                self.get_logger().info(
-                    f"[HSV] band_counts={counts} top_hue_peaks(saturated)={peaks}"
-                )
-            else:
-                self.get_logger().info(f"[HSV] band_counts={counts} (no saturated px)")
 
         new_detections = 0
         for name, _hx, lo, hi, rviz_rgb, _bgr in COLOR_TARGETS:
@@ -499,7 +466,14 @@ class LogoDetectorNode(Node):
         q = self.GROUND_PIXEL_QUANTIZE_M
         added = 0
 
+        # Only show the FIRST detected cluster per color — once a colour
+        # is in _locked_logos we stop accumulating new pixels for it.
+        # This produces the "three tiles visible: orange/green/blue" plot
+        # instead of a runaway accumulation across the whole run.
+        already_locked = {entry[0] for entry in self._locked_logos}
         for name, _, lo, hi, _, _ in COLOR_TARGETS:
+            if name in already_locked:
+                continue
             band = cv2.inRange(hsv, lo, hi)
             mask = cv2.bitwise_and(band, near_white)
             if cv2.countNonZero(mask) < self.min_cluster_px:
@@ -555,10 +529,44 @@ class LogoDetectorNode(Node):
                 added += 1
 
         if added > 0:
+            self._ground_paint_dirty = True
             self.get_logger().info(
                 f"[GROUND-PAINT] +{added} pixels (total={len(self._ground_paint)})",
                 throttle_duration_sec=3.0,
             )
+
+    def _publish_ground_paint(self):
+        """Republish the accumulated ground-paint cloud on /logo/points."""
+        if not self._ground_paint_dirty:
+            return
+        self._ground_paint_dirty = False
+        n = len(self._ground_paint)
+        if n == 0:
+            return
+        data = np.empty((n, 4), dtype=np.float32)
+        z_plane = self.ground_plane_z if self.flatten_to_ground else 0.0
+        for i, (rgb_int, _name, wx, wy) in enumerate(self._ground_paint.values()):
+            data[i, 0] = wx
+            data[i, 1] = wy
+            data[i, 2] = z_plane
+            data[i, 3] = np.array([rgb_int], dtype=np.uint32).view(np.float32)[0]
+        cloud = PointCloud2()
+        cloud.header.frame_id = self.map_frame
+        cloud.header.stamp = self.get_clock().now().to_msg()
+        cloud.height = 1
+        cloud.width = n
+        cloud.fields = [
+            PointField(name='x',   offset=0,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='y',   offset=4,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='z',   offset=8,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='rgb', offset=12, datatype=PointField.FLOAT32, count=1),
+        ]
+        cloud.is_bigendian = False
+        cloud.point_step = 16
+        cloud.row_step = 16 * n
+        cloud.is_dense = True
+        cloud.data = data.tobytes()
+        self.logo_cloud_pub.publish(cloud)
 
     # ── Public API for future direction-decision logic ─────────────────
     def get_ground_pixels(self, color_name: str | None = None
@@ -667,15 +675,10 @@ class LogoDetectorNode(Node):
         # should be in the direction the robot is currently facing in map.
         # Logged at WARN level so it survives --log-level WARN on this node.
         forward_in_map = rot @ np.array([0.0, 0.0, 1.0])
-        self.get_logger().warn(
-            f"[APRIL][TF] frame='{cam_frame}' map='{self.map_frame}'  "
-            f"t_cam=({t_vec[0]:+.2f},{t_vec[1]:+.2f},{t_vec[2]:+.2f})  "
-            f"optical_fwd_in_map=({forward_in_map[0]:+.2f},"
-            f"{forward_in_map[1]:+.2f},{forward_in_map[2]:+.2f})  "
-            f"R=[[{rot[0,0]:+.2f},{rot[0,1]:+.2f},{rot[0,2]:+.2f}],"
-            f"[{rot[1,0]:+.2f},{rot[1,1]:+.2f},{rot[1,2]:+.2f}],"
-            f"[{rot[2,0]:+.2f},{rot[2,1]:+.2f},{rot[2,2]:+.2f}]]",
-            throttle_duration_sec=5.0,
+        self.get_logger().info(
+            f"[APRIL][TF] optical_fwd_in_map=({forward_in_map[0]:+.2f},"
+            f"{forward_in_map[1]:+.2f},{forward_in_map[2]:+.2f})",
+            throttle_duration_sec=30.0,
         )
         # The z-component of optical_fwd_in_map should be ≈ 0 (camera points
         # horizontally, not at the sky or the floor). If it's close to ±1
@@ -707,14 +710,16 @@ class LogoDetectorNode(Node):
             p_cam = self._deproject(u, v, d, fx, fy, cx, cy)
             p_map = rot @ p_cam + t_vec
             x, y, z = float(p_map[0]), float(p_map[1]), float(p_map[2])
-            locked_tag = "locked" if logical_id in self._locked_tags else "NEW"
-            self.get_logger().warn(
-                f"[APRIL#L{logical_id}/R{raw_id}][{locked_tag}] frame='{cam_frame}' "
-                f"px=({u},{v}) d={d:.3f}m "
-                f"p_optical=({p_cam[0]:+.3f},{p_cam[1]:+.3f},{p_cam[2]:+.3f}) "
-                f"p_map=({x:+.3f},{y:+.3f},{z:+.3f}) "
-                f"cam_origin_in_map=({t_vec[0]:+.2f},{t_vec[1]:+.2f},{t_vec[2]:+.2f})"
-            )
+            # Only log on first lock of a new tag (or heavily throttled
+            # for already-locked re-sightings). Per-frame WARN output at
+            # 10-15 Hz was eating real-time factor.
+            is_new = logical_id not in self._locked_tags
+            if is_new:
+                self.get_logger().warn(
+                    f"[APRIL#L{logical_id}/R{raw_id}][NEW] "
+                    f"px=({u},{v}) d={d:.3f}m "
+                    f"p_map=({x:+.3f},{y:+.3f},{z:+.3f})"
+                )
             if logical_id in self._locked_tags:
                 continue
             # Gate plate visibility: never draw a plate for logical N if
