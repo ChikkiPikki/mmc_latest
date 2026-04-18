@@ -102,7 +102,13 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='static_tf_cam',
         output='log',
-        arguments=['0', '0', '0', '0', '0', '0', 'CAM', 'mini_r1/base_link/camera'],
+        # REP-103 body->optical rotation so the camera frame stamped on
+        # /r1_mini/camera/* images matches the optical convention
+        # (x-right, y-down, z-forward) that apriltag_ros and the
+        # deprojection in logo_detector_node both assume. Without this,
+        # points and tag poses get the wrong rotation and float in air.
+        # Args: x y z yaw pitch roll parent child.
+        arguments=['0', '0', '0', '-1.5707963', '0', '-1.5707963', 'CAM', 'mini_r1/base_link/camera'],
         parameters=[{'use_sim_time': True}],
     )
 

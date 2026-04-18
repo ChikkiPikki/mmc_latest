@@ -13,14 +13,13 @@ ekf_filter_node:
     world_frame: odom
 
     # ── Odom input (wheel encoders from diff drive) ──
-    # Trust wheel odom ONLY for X/Y linear velocity.
-    # Wheel yaw-rate is unreliable in Gazebo (phantom rotation from slip) —
-    # IMU is our only trustworthy yaw source.
+    # Legacy (first-version) fusion: trust wheel odom for X/Y linear velocity
+    # AND yaw rate. This was the version with more accurate odometry.
     odom0: /r1_mini/odom
     odom0_config: [false, false, false,
                    false, false, false,
                    true,  true,  false,
-                   false, false, false,
+                   false, false, true,
                    false, false, false]
     odom0_differential: false
 

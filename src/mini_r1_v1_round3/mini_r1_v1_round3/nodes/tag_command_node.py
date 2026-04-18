@@ -13,6 +13,19 @@ from std_msgs.msg import String, Empty
 from apriltag_msgs.msg import AprilTagDetectionArray
 
 
+# Raw apriltag IDs as printed on the physical/SDF tags are off-by-one from
+# the "logical" mission IDs. We remap once here; every downstream consumer
+# (logo_detector, mission_manager, CSV logger, RViz plates) only ever
+# sees the logical IDs and never has to worry about the mapping.
+RAW_TO_LOGICAL_ID = {
+    0: 2,
+    1: 1,
+    2: 3,
+    3: 4,
+    4: 5,
+}
+
+
 TAG_COMMANDS = {
     1: "left",
     2: "right",
@@ -95,11 +108,16 @@ class TagCommandNode(Node):
     def _on_detections(self, msg: AprilTagDetectionArray) -> None:
         for det in msg.detections:
             try:
-                tag_id = self._extract_id(det)
+                raw_id = self._extract_id(det)
             except Exception as e:
                 self.get_logger().warn(f"Could not parse detection id: {e}")
                 continue
-            self._process_tag(tag_id)
+            logical_id = RAW_TO_LOGICAL_ID.get(raw_id)
+            if logical_id is None:
+                self.get_logger().warn(
+                    f"Raw tag id {raw_id} has no logical mapping — skipping")
+                continue
+            self._process_tag(logical_id)
 
     def _process_tag(self, tag_id: int) -> None:
         if tag_id in self.seen_set:

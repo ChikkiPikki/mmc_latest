@@ -50,26 +50,44 @@
   gz_type_name: "ignition.msgs.IMU"
   direction: GZ_TO_ROS
 
+# Camera topics: sensor-data QoS (BEST_EFFORT) on both publish side and
+# subscribe side. Default RELIABLE for 30Hz 640×480 images caused bridge
+# backpressure; apriltag_node was only getting 3-6 images / 10s vs 18
+# camera_info, so detections ran at <1 Hz.
 - ros_topic_name: "/r1_mini/camera/image_raw"
   gz_topic_name: "/r1_mini/camera/image"
   ros_type_name: "sensor_msgs/msg/Image"
   gz_type_name: "ignition.msgs.Image"
   direction: GZ_TO_ROS
+  lazy: false
+  ros_qos_reliability: best_effort
+  ros_qos_durability: volatile
+  ros_qos_history: keep_last
+  ros_qos_depth: 5
 
 - ros_topic_name: "/r1_mini/camera/camera_info"
   gz_topic_name: "/r1_mini/camera/camera_info"
   ros_type_name: "sensor_msgs/msg/CameraInfo"
   gz_type_name: "ignition.msgs.CameraInfo"
   direction: GZ_TO_ROS
+  lazy: false
+  ros_qos_reliability: best_effort
+  ros_qos_durability: volatile
+  ros_qos_history: keep_last
+  ros_qos_depth: 5
 
 - ros_topic_name: "/r1_mini/camera/depth_image"
   gz_topic_name: "/r1_mini/camera/depth_image"
   ros_type_name: "sensor_msgs/msg/Image"
   gz_type_name: "ignition.msgs.Image"
   direction: GZ_TO_ROS
+  lazy: false
+  ros_qos_reliability: best_effort
+  ros_qos_durability: volatile
+  ros_qos_history: keep_last
+  ros_qos_depth: 5
 
-- ros_topic_name: "/r1_mini/camera/points"
-  gz_topic_name: "/r1_mini/camera/points"
-  ros_type_name: "sensor_msgs/msg/PointCloud2"
-  gz_type_name: "ignition.msgs.PointCloudPacked"
-  direction: GZ_TO_ROS
+# /r1_mini/camera/points bridge removed — the gz RGBD point cloud
+# (~300k points × 30Hz) was the biggest single drain on sim RTF and
+# nothing in the stack actually consumed it. logo_detector builds its
+# own colored cloud on /logo/points from RGB + depth.

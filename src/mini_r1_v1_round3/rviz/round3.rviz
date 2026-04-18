@@ -75,15 +75,16 @@ Visualization Manager:
       Topic:
         Value: /r1_mini/camera/image_raw
     - Class: rviz_default_plugins/Image
-      Name: Logo Mask
+      Name: Symbol Detection
       Enabled: true
       Topic:
         Value: /logo/mask_viz
     - Class: rviz_default_plugins/Image
-      Name: Depth
-      Enabled: false
+      Name: Depth Camera
+      Enabled: true
       Topic:
         Value: /logo/depth_viz
+      Normalize Range: false
     - Class: rviz_default_plugins/PointCloud2
       Name: Logo Points
       Enabled: true
