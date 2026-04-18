@@ -155,8 +155,14 @@ local_costmap:
           inf_is_valid: false
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        cost_scaling_factor: 5.0
-        inflation_radius: 0.06
+        # Nav2 requires inflation_radius >= footprint inscribed radius
+        # (0.16 m for our [±0.17, ±0.16] footprint). Any smaller value
+        # triggers a costmap error and planning goes unreliable. Bumping
+        # to 0.17 + high cost_scaling_factor keeps the soft gradient
+        # tight, so the effective padding feels nearly as small as the
+        # previous 0.06 m setting but without the error.
+        cost_scaling_factor: 8.0
+        inflation_radius: 0.17
       always_send_full_costmap: true
 
 global_costmap:
@@ -212,8 +218,14 @@ global_costmap:
           inf_is_valid: false
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        cost_scaling_factor: 5.0
-        inflation_radius: 0.06
+        # Nav2 requires inflation_radius >= footprint inscribed radius
+        # (0.16 m for our [±0.17, ±0.16] footprint). Any smaller value
+        # triggers a costmap error and planning goes unreliable. Bumping
+        # to 0.17 + high cost_scaling_factor keeps the soft gradient
+        # tight, so the effective padding feels nearly as small as the
+        # previous 0.06 m setting but without the error.
+        cost_scaling_factor: 8.0
+        inflation_radius: 0.17
       always_send_full_costmap: true
 
 planner_server:
