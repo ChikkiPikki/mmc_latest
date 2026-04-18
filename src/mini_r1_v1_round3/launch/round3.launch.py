@@ -41,25 +41,14 @@ def generate_launch_description():
     textures_dir = os.path.join(grid_world_root, 'materials', 'textures')
     world_file = os.path.join(grid_world_worlds, 'grid_world_FINAL.sdf')
 
-    # Set resource paths DIRECTLY in os.environ (not via SetEnvironmentVariable
-    # action). SetEnvironmentVariable wasn't reaching the gz_sim GUI child
-    # process — textures rendered as blank placeholders. Touching os.environ
-    # before the ros_gz_sim launch file is imported guarantees every child
-    # fork inherits it.
-    _existing_ign = os.environ.get('IGN_GAZEBO_RESOURCE_PATH', '')
-    _existing_gz = os.environ.get('GZ_SIM_RESOURCE_PATH', '')
-    resource_path = (f'{grid_world_parent}:{grid_world_root}:{grid_world_worlds}'
-                     + (f':{_existing_ign}' if _existing_ign else ''))
-    os.environ['IGN_GAZEBO_RESOURCE_PATH'] = resource_path
-    os.environ['GZ_SIM_RESOURCE_PATH'] = (
-        f'{grid_world_parent}:{grid_world_root}:{grid_world_worlds}'
-        + (f':{_existing_gz}' if _existing_gz else ''))
-    # Keep the Launch-action entries as belt-and-braces.
+    resource_path = (
+        f'{grid_world_parent}:{grid_world_root}:{grid_world_worlds}:'
+        + os.environ.get('IGN_GAZEBO_RESOURCE_PATH', '')
+    )
     set_resource_path = SetEnvironmentVariable(
         name='IGN_GAZEBO_RESOURCE_PATH', value=resource_path)
     set_gz_resource_path = SetEnvironmentVariable(
-        name='GZ_SIM_RESOURCE_PATH', value=os.environ['GZ_SIM_RESOURCE_PATH'])
-    print(f'[round3.launch] IGN_GAZEBO_RESOURCE_PATH = {resource_path}')
+        name='GZ_SIM_RESOURCE_PATH', value=resource_path)
 
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
