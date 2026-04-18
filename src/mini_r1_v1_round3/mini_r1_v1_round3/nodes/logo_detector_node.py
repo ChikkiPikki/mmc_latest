@@ -865,6 +865,25 @@ class LogoDetectorNode(Node):
             self._pending_tag_positions.pop(logical_id, None)
             changed = True
 
+        # Promotion sweep: any buffered sighting whose predecessor is now
+        # locked gets promoted to _locked_tags (and published) without
+        # needing to re-see the tag. Critical for tag 2 — it's typically
+        # seen BEFORE tag 1, and LOOKING_FOR_TAG2 needs the position to
+        # dispatch the approach goal.
+        for pend_id in sorted(list(self._pending_tag_positions.keys())):
+            if (pend_id - 1) in self._locked_tags and pend_id not in self._locked_tags:
+                px, py, pz = self._pending_tag_positions.pop(pend_id)
+                self._locked_tags[pend_id] = (px, py, pz)
+                # We don't have a fresh camera origin for the buffered
+                # detection, so use the current cam origin as a proxy
+                # for plate orientation. Good enough for a visualisation.
+                self._locked_tag_yaws[pend_id] = float(
+                    math.atan2(t_vec[1] - py, t_vec[0] - px))
+                self.get_logger().warn(
+                    f'[APRIL#L{pend_id}][PROMOTED] buffered sighting '
+                    f'→ _locked_tags (predecessor now locked)')
+                changed = True
+
         if changed:
             self._publish_markers()
             self._publish_tag_positions()

@@ -1744,45 +1744,8 @@ class MissionManagerNode(Node):
 
         now = self.get_clock().now().to_msg()
 
-        # 1) World / odom axes at the origin — X red, Y green, Z blue.
-        for i, (vx, vy, vz, rr, gg, bb, label) in enumerate([
-            (1.0, 0.0, 0.0, 1.0, 0.1, 0.1, '+X'),
-            (0.0, 1.0, 0.0, 0.1, 1.0, 0.1, '+Y'),
-            (0.0, 0.0, 1.0, 0.1, 0.3, 1.0, '+Z'),
-        ]):
-            a = Marker()
-            a.header.frame_id = 'odom'
-            a.header.stamp = now
-            a.ns = 'mission_poi_axes'
-            a.id = i
-            a.type = Marker.ARROW
-            a.action = Marker.ADD
-            a.points = [Pose().position, Pose().position]  # placeholder
-            p0 = Point(); p0.x = 0.0; p0.y = 0.0; p0.z = 0.0
-            p1 = Point(); p1.x = vx * 0.8; p1.y = vy * 0.8; p1.z = vz * 0.8
-            a.points = [p0, p1]
-            a.scale.x = 0.035         # shaft diameter
-            a.scale.y = 0.07          # head diameter
-            a.scale.z = 0.10          # head length
-            a.color.r = rr; a.color.g = gg; a.color.b = bb; a.color.a = 1.0
-            a.pose.orientation.w = 1.0
-            arr.markers.append(a)
-
-            t = Marker()
-            t.header.frame_id = 'odom'
-            t.header.stamp = now
-            t.ns = 'mission_poi_axes_label'
-            t.id = i
-            t.type = Marker.TEXT_VIEW_FACING
-            t.action = Marker.ADD
-            t.pose.position.x = vx * 0.9
-            t.pose.position.y = vy * 0.9
-            t.pose.position.z = vz * 0.9 + 0.05
-            t.pose.orientation.w = 1.0
-            t.scale.z = 0.12
-            t.color.r = rr; t.color.g = gg; t.color.b = bb; t.color.a = 1.0
-            t.text = label
-            arr.markers.append(t)
+        # World axes arrows REMOVED — user wanted no more littering arrows.
+        # (If you want them back, change this to draw +X/+Y/+Z ARROWs.)
 
         # 2) Known logical-tag positions — small white spheres + label.
         for logical_id, (x, y, z) in self._tag_positions_map.items():
@@ -1793,8 +1756,7 @@ class MissionManagerNode(Node):
                 f'tag_pos_label', logical_id * 10, x, y, z + 0.30,
                 f'TAG{logical_id}', (0.9, 0.9, 0.9)))
 
-        # 3) Action waypoints — colored spheres + labels + a thin arrow
-        #    pointing in the commanded yaw direction.
+        # 3) Action waypoints — spheres + labels only. No yaw arrows.
         for logical_id, pois in self._action_poi.items():
             for i, (label, x, y, yaw, col) in enumerate(pois):
                 mid = logical_id * 100 + i
@@ -1803,25 +1765,6 @@ class MissionManagerNode(Node):
                 arr.markers.append(self._poi_text(
                     'action_waypoint_label', mid, x, y, 0.35,
                     f'T{logical_id}·{label}', col))
-                # Direction arrow to show commanded yaw.
-                arrow = Marker()
-                arrow.header.frame_id = 'odom'
-                arrow.header.stamp = now
-                arrow.ns = 'action_waypoint_yaw'
-                arrow.id = mid
-                arrow.type = Marker.ARROW
-                arrow.action = Marker.ADD
-                p0 = Point(); p0.x = x; p0.y = y; p0.z = 0.05
-                p1 = Point()
-                p1.x = x + 0.35 * math.cos(yaw)
-                p1.y = y + 0.35 * math.sin(yaw)
-                p1.z = 0.05
-                arrow.points = [p0, p1]
-                arrow.scale.x = 0.04; arrow.scale.y = 0.08; arrow.scale.z = 0.12
-                arrow.color.r = col[0]; arrow.color.g = col[1]; arrow.color.b = col[2]
-                arrow.color.a = 0.9
-                arrow.pose.orientation.w = 1.0
-                arr.markers.append(arrow)
 
         # 4) Buffered (pre-predecessor) tag sightings — pulsing magenta
         #    sphere so the user can see WHERE we think the tag is even
