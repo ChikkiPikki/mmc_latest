@@ -20,10 +20,22 @@ def generate_launch_description():
     apriltag_config = os.path.join(pkg_share, 'config', 'apriltag.yaml')
     rviz_config = os.path.join(pkg_share, 'rviz', 'round3.rviz')
 
-    grid_world_root = os.environ.get(
-        'GRID_WORLD_ROOT',
-        '/home/dev/grid_world_hackathon/gaws_ws/src/grid_world',
-    )
+    # GRID_WORLD_ROOT env overrides everything. Otherwise try the Docker
+    # container path first, then the host path. Whichever actually exists
+    # wins — the other machine's path is ignored so IGN_GAZEBO_RESOURCE_PATH
+    # isn't polluted with non-existent entries.
+    grid_world_root = os.environ.get('GRID_WORLD_ROOT')
+    if not grid_world_root:
+        _candidates = [
+            '/home/dev/grid_world_hackathon/gaws_ws/src/grid_world',
+            os.path.expanduser(
+                '~/ros2_ws/grid_world_hackathon/gaws_ws/src/grid_world'),
+            '/home/tanay/ros2_ws/grid_world_hackathon/gaws_ws/src/grid_world',
+        ]
+        grid_world_root = next(
+            (p for p in _candidates if os.path.isdir(p)),
+            _candidates[0],
+        )
     grid_world_worlds = os.path.join(grid_world_root, 'worlds')
     grid_world_parent = os.path.dirname(grid_world_root)
     textures_dir = os.path.join(grid_world_root, 'materials', 'textures')
