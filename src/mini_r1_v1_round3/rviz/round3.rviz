@@ -74,6 +74,38 @@ Visualization Manager:
       Enabled: true
       Topic:
         Value: /r1_mini/camera/image_raw
+    - Class: rviz_default_plugins/Image
+      Name: Logo Mask
+      Enabled: true
+      Topic:
+        Value: /logo/mask_viz
+    - Class: rviz_default_plugins/Image
+      Name: Depth
+      Enabled: false
+      Topic:
+        Value: /logo/depth_viz
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Logo Points
+      Enabled: true
+      Topic:
+        Value: /logo/points
+      Size (m): 0.025
+      Style: Spheres
+      Color Transformer: RGB8
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Logo Markers
+      Enabled: true
+      Topic:
+        Value: /logo/markers
+    - Class: rviz_default_plugins/Pose
+      Name: Logo Pose
+      Enabled: true
+      Topic:
+        Value: /logo/pose
+      Shape: Arrow
+      Color: 255; 255; 0
+      Shaft Length: 0.4
+      Head Length: 0.1
   Global Options:
     Fixed Frame: map
     Frame Rate: 30
