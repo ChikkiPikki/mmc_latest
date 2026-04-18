@@ -75,6 +75,14 @@ COLOR_TARGETS = [
      np.array([ 41, 171, 145], dtype=np.uint8),
      np.array([ 77, 255, 195], dtype=np.uint8),
      (0.17, 0.67, 0.15), (39, 170, 43)),
+    # Red (for stop-zone detection). OpenCV-HSV H≈0/180 (wraps), so
+    # we use a low-H band; for highly saturated red this matches.
+    # A second wrap-around range (170-180) is folded in via masking
+    # in _red_mask() below.
+    ("red",    0xc71c22,
+     np.array([  0, 140, 120], dtype=np.uint8),
+     np.array([ 10, 255, 255], dtype=np.uint8),
+     (0.78, 0.11, 0.13), (34, 28, 199)),
 ]
 
 
@@ -213,6 +221,21 @@ class LogoDetectorNode(Node):
         self._ground_paint_dirty = False
         # 2 Hz re-publish is plenty for a growing-set visual.
         self.create_timer(0.5, self._publish_ground_paint)
+
+        # ── Tile-pair publisher (blue-clustered tiles + paired orange/green) ──
+        self.tile_pairs_pub = self.create_publisher(
+            String, '/logo/tile_pairs', latched)
+        # Red stop-zone publisher — fires when the red cluster centroid
+        # is stable. Latched so mission_manager picks up a single value.
+        self.stop_zone_pub = self.create_publisher(
+            PoseStamped, '/stop_zone', latched)
+        self._stop_zone_fired = False
+        # Run clustering every 1 s — not every RGBD frame.
+        self.create_timer(1.0, self._run_tile_clustering)
+        # Tile-clustering parameters.
+        self.TILE_CLUSTER_BIN_M = 0.05    # 5 cm cells in the binary grid
+        self.TILE_CLUSTER_MIN_CELLS = 4   # ≥ 4 cells (~100 cm²) to count
+        self.TILE_PAIR_MAX_RADIUS_M = 0.45  # orange/green ≤ this from blue centre
 
         self._frame_count = 0
 
@@ -466,14 +489,10 @@ class LogoDetectorNode(Node):
         q = self.GROUND_PIXEL_QUANTIZE_M
         added = 0
 
-        # Only show the FIRST detected cluster per color — once a colour
-        # is in _locked_logos we stop accumulating new pixels for it.
-        # This produces the "three tiles visible: orange/green/blue" plot
-        # instead of a runaway accumulation across the whole run.
-        already_locked = {entry[0] for entry in self._locked_logos}
+        # Always accumulate ALL colours — blue is used later for tile
+        # clustering, red for stop-zone detection. First-write-wins on
+        # each quantised cell keeps memory bounded.
         for name, _, lo, hi, _, _ in COLOR_TARGETS:
-            if name in already_locked:
-                continue
             band = cv2.inRange(hsv, lo, hi)
             mask = cv2.bitwise_and(band, near_white)
             if cv2.countNonZero(mask) < self.min_cluster_px:
@@ -567,6 +586,106 @@ class LogoDetectorNode(Node):
         cloud.is_dense = True
         cloud.data = data.tobytes()
         self.logo_cloud_pub.publish(cloud)
+
+    # ── Tile clustering + stop-zone ─────────────────────────────────────
+    def _cluster_color_to_centroids(self, color_name: str,
+                                    cells_per_m: float) -> list[tuple[float, float, int]]:
+        """Build a binary 2-D grid of all accumulated pixels whose colour
+        matches `color_name`, run connected-component labelling, return
+        [(wx, wy, pixel_count), …] for each cluster that has at least
+        TILE_CLUSTER_MIN_CELLS cells."""
+        pts = [(wx, wy) for _rgb, n, wx, wy in self._ground_paint.values()
+               if n == color_name]
+        if len(pts) < self.TILE_CLUSTER_MIN_CELLS:
+            return []
+        xs = np.array([p[0] for p in pts], dtype=np.float32)
+        ys = np.array([p[1] for p in pts], dtype=np.float32)
+        # Bounding box of this colour's points, padded by 2 cells.
+        xmin, xmax = xs.min() - 0.1, xs.max() + 0.1
+        ymin, ymax = ys.min() - 0.1, ys.max() + 0.1
+        W = max(3, int(math.ceil((xmax - xmin) * cells_per_m)))
+        H = max(3, int(math.ceil((ymax - ymin) * cells_per_m)))
+        grid = np.zeros((H, W), dtype=np.uint8)
+        cxs = np.clip(((xs - xmin) * cells_per_m).astype(np.int32), 0, W - 1)
+        cys = np.clip(((ys - ymin) * cells_per_m).astype(np.int32), 0, H - 1)
+        grid[cys, cxs] = 1
+        # 1-cell dilation joins near-neighbour pixels into one blob.
+        grid = cv2.dilate(grid, np.ones((3, 3), np.uint8))
+        n, _, stats, cents = cv2.connectedComponentsWithStats(grid, connectivity=8)
+        out = []
+        for i in range(1, n):
+            area = int(stats[i, cv2.CC_STAT_AREA])
+            if area < self.TILE_CLUSTER_MIN_CELLS:
+                continue
+            gx, gy = float(cents[i, 0]), float(cents[i, 1])
+            wx = xmin + gx / cells_per_m
+            wy = ymin + gy / cells_per_m
+            out.append((wx, wy, area))
+        return out
+
+    def _run_tile_clustering(self):
+        """Cluster accumulated blue pixels into tile centres, pair each
+        with the nearest orange + green cluster (within
+        TILE_PAIR_MAX_RADIUS_M), snap the arrow direction to the nearest
+        90°, and publish JSON on /logo/tile_pairs. Also publishes the
+        red cluster (if big enough + stable) as /stop_zone."""
+        if not self._ground_paint:
+            return
+        cells_per_m = 1.0 / self.TILE_CLUSTER_BIN_M
+        blue_clusters = self._cluster_color_to_centroids('blue', cells_per_m)
+        orange_clusters = self._cluster_color_to_centroids('orange', cells_per_m)
+        green_clusters = self._cluster_color_to_centroids('green', cells_per_m)
+        red_clusters = self._cluster_color_to_centroids('red', cells_per_m)
+
+        # Pair each blue centre with the nearest orange + green within
+        # TILE_PAIR_MAX_RADIUS_M. Snap the green→orange vector direction
+        # to the nearest multiple of π/2.
+        pairs = []
+        R = self.TILE_PAIR_MAX_RADIUS_M
+        for bx, by, _ba in blue_clusters:
+            def nearest(xys):
+                best = None; best_d = math.inf
+                for x, y, a in xys:
+                    d = math.hypot(x - bx, y - by)
+                    if d <= R and d < best_d:
+                        best_d = d; best = (x, y, a)
+                return best
+            o = nearest(orange_clusters)
+            g = nearest(green_clusters)
+            if o is None or g is None:
+                continue
+            ox, oy, _ = o; gx, gy, _ = g
+            yaw_raw = math.atan2(oy - gy, ox - gx)
+            # Snap to nearest π/2.
+            yaw = round(yaw_raw / (math.pi / 2.0)) * (math.pi / 2.0)
+            yaw = math.atan2(math.sin(yaw), math.cos(yaw))
+            pairs.append({
+                'blue': [bx, by],
+                'orange': [ox, oy],
+                'green': [gx, gy],
+                'yaw_snapped': yaw,
+            })
+
+        msg = String()
+        msg.data = json.dumps(pairs)
+        self.tile_pairs_pub.publish(msg)
+
+        # Stop zone: publish the biggest red cluster once.
+        if not self._stop_zone_fired and red_clusters:
+            red_clusters.sort(key=lambda c: -c[2])
+            rx, ry, area = red_clusters[0]
+            if area >= 8:
+                ps = PoseStamped()
+                ps.header.stamp = self.get_clock().now().to_msg()
+                ps.header.frame_id = self.map_frame
+                ps.pose.position.x = rx
+                ps.pose.position.y = ry
+                ps.pose.orientation.w = 1.0
+                self.stop_zone_pub.publish(ps)
+                self._stop_zone_fired = True
+                self.get_logger().warn(
+                    f'[STOP_ZONE] red cluster at ({rx:+.2f},{ry:+.2f}) '
+                    f'area={area} cells')
 
     # ── Public API for future direction-decision logic ─────────────────
     def get_ground_pixels(self, color_name: str | None = None

@@ -5,8 +5,11 @@ Drives Nav2 via nav2_simple_commander. Overrides planner goals based on
 AprilTag commands and detected tile positions.
 """
 
+import csv
+import datetime
 import json
 import math
+import os
 import time
 from collections import deque
 
@@ -41,6 +44,8 @@ TAG1_GOAL_A = 'TAG1_GOAL_A'        # drive to (tag1_x-0.5, tag1_y, yaw=90°)
 TAG1_GOAL_B = 'TAG1_GOAL_B'        # drive forward to (tag1_x-0.5, tag1_y+1.5, yaw=90°)
 LOOKING_FOR_TAG2 = 'LOOKING_FOR_TAG2'  # rotate in place until tag 2 is centered in image
 TAG2_GOAL   = 'TAG2_GOAL'          # drive to (tag2_x, tag2_y-1.5, yaw=0°)
+TAG4_UTURN  = 'TAG4_UTURN'         # rotate 180° in place, stop following
+TAG5_APPROACH = 'TAG5_APPROACH'    # drive to within 0.5 m of tag 5 then start FOLLOW_ORANGE
 
 
 def yaw_to_quat(yaw):
@@ -240,10 +245,60 @@ class MissionManagerNode(Node):
         self._action_next_goal: tuple[float, float, float] | None = None
         # Image-center thresholds used to decide when tag 2 is "perfectly
         # in view" during LOOKING_FOR_TAG2. Matches a 640-wide camera.
-        self.TAG_CENTERED_PIXEL_TOL = 35
-        self.LOOK_ROTATE_OMEGA = 0.45   # rad/s while scanning for tag 2
+        self.TAG_CENTERED_PIXEL_TOL = 60
+        self.LOOK_ROTATE_OMEGA = 0.25   # slower so we don't overshoot
+                                        # between apriltag frames (~1 Hz)
+        self.LOOK_DETECTION_MAX_AGE_S = 0.7  # reject stale apriltag centroids
+        self.LOOK_TIMEOUT_S = 25.0      # force-transition after this long
+        self._look_started_at: float = 0.0
         self._tag1_pos: tuple[float, float] | None = None
         self._tag2_pos: tuple[float, float] | None = None
+        self._tag5_pos: tuple[float, float] | None = None
+
+        # ── CSV mission log (workspace root /home/.../ros2_ws/mission.csv) ──
+        # Columns: sim_sec, wall_iso, event_type, logical_id, raw_id,
+        #          tag_x, tag_y, tag_z, tag_yaw_deg,
+        #          bot_x, bot_y, bot_z, bot_yaw_deg
+        self._csv_path = self._resolve_workspace_csv_path('mission.csv')
+        self._csv_file = None
+        self._csv_writer = None
+        self._init_csv_log()
+        self._logged_tile_keys: set[tuple[int, int]] = set()
+
+        # ── Photo capture for each tag event ────────────────────────────
+        try:
+            from cv_bridge import CvBridge as _CvBridge
+            self._cv_bridge = _CvBridge()
+        except Exception as e:
+            self._cv_bridge = None
+            self.get_logger().warn(f'[CSV] cv_bridge unavailable: {e}')
+        self._latest_frame_rgb = None   # np.ndarray HxWx3 uint8
+        self._photo_dir = self._resolve_workspace_csv_path('mission_photos')
+        try:
+            os.makedirs(self._photo_dir, exist_ok=True)
+        except Exception as e:
+            self.get_logger().warn(f'[CSV] mkdir {self._photo_dir}: {e}')
+        from sensor_msgs.msg import Image as _Image
+        best_effort_img_qos = QoSProfile(
+            depth=2,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self.create_subscription(
+            _Image, '/r1_mini/camera/image_raw',
+            self._on_camera_image, best_effort_img_qos)
+
+        # ── Tile-pairs from logo_detector ───────────────────────────────
+        # Each entry: {'green': [gx,gy], 'orange': [ox,oy], 'yaw_snapped': φ}
+        self._tile_pairs: list[dict] = []
+        self.create_subscription(
+            String, '/logo/tile_pairs',
+            self._on_tile_pairs, 5)
+        # Consumed tile-pair keys (quantised to 0.3 m) so follow states
+        # don't re-target the same tile.
+        self._consumed_tile_keys: set[tuple[int, int]] = set()
+        self._follow_active_color: str | None = None   # 'green' / 'orange' / None
+        self._current_follow_tile_key: tuple[int, int] | None = None
 
         self._last_map_odom = None
         self._warp_detected = False
@@ -426,8 +481,8 @@ class MissionManagerNode(Node):
             self._maybe_trigger_gated_tag(lid)
 
     def _maybe_trigger_gated_tag(self, logical_id: int):
-        """Fire tag 1 or tag 2 action as soon as we have its position AND
-        the predecessor has run AND we're in a state that can accept an
+        """Fire tag N action as soon as we have its position AND the
+        predecessor has run AND we're in a state that can accept an
         action transition."""
         if logical_id in self._executed_tag_ids:
             return
@@ -436,26 +491,56 @@ class MissionManagerNode(Node):
         pos = self._tag_positions_map.get(logical_id)
         if pos is None:
             return
+        busy_states = (TAG1_GOAL_A, TAG1_GOAL_B, LOOKING_FOR_TAG2,
+                       TAG2_GOAL, TAG4_UTURN, TAG5_APPROACH,
+                       FOLLOW_GREEN, FOLLOW_ORANGE)
         if logical_id == 1:
-            if self.state in (TAG1_GOAL_A, TAG1_GOAL_B,
-                              LOOKING_FOR_TAG2, TAG2_GOAL):
+            if self.state in busy_states:
                 return
             self._executed_tag_ids.add(1)
             self._enter_tag1_flow(pos)
         elif logical_id == 2:
-            # Logo-detector's predecessor gate means tag 2 can only ever
-            # appear in map_positions AFTER tag 1 is locked, so we're
-            # clear to act. Any ongoing action keeps owning control —
-            # LOOKING_FOR_TAG2 will consume the position itself.
-            if self.state in (TAG1_GOAL_A, TAG1_GOAL_B,
-                              LOOKING_FOR_TAG2, TAG2_GOAL):
+            if self.state in busy_states:
                 return
             self._executed_tag_ids.add(2)
             self._enter_tag2_flow(pos)
+        elif logical_id == 3:
+            if self.state in busy_states:
+                return
+            # Tag 3 = START FOLLOWING GREEN (only after tag 2 completed).
+            if 2 not in self._executed_tag_ids:
+                self.get_logger().info(
+                    '[TAG3] seen before tag 2 — deferring.')
+                return
+            self._executed_tag_ids.add(3)
+            self._log_tag_event(3, pos)
+            self._enter_follow_flow('green', pos)
+        elif logical_id == 4:
+            # Tag 4 = U-TURN + STOP FOLLOWING.
+            if 3 not in self._executed_tag_ids:
+                self.get_logger().info(
+                    '[TAG4] seen before tag 3 — deferring.')
+                return
+            self._executed_tag_ids.add(4)
+            self._log_tag_event(4, pos)
+            self._enter_tag4_uturn(pos)
+        elif logical_id == 5:
+            # Tag 5 = APPROACH to 0.5 m then FOLLOW ORANGE.
+            if 4 not in self._executed_tag_ids:
+                self.get_logger().info(
+                    '[TAG5] seen before tag 4 — deferring.')
+                return
+            self._executed_tag_ids.add(5)
+            self._log_tag_event(5, pos)
+            self._enter_tag5_approach(pos)
 
     def _on_apriltag_detections_raw(self, msg):
         """Capture raw apriltag pixel centres for the LOOKING_FOR_TAG2
-        rotation-to-center test."""
+        rotation-to-center test. Timestamp is attached so the look
+        logic can ignore stale detections (apriltag_node updates at
+        <1 Hz under sim load — a stale centroid could falsely trigger
+        the 'tag centered' branch)."""
+        now_t = time.time()
         for det in msg.detections:
             try:
                 raw_id = int(det.id)
@@ -465,13 +550,195 @@ class MissionManagerNode(Node):
                 except Exception:
                     continue
             self._last_raw_detection[raw_id] = (
-                int(det.centre.x), int(det.centre.y), 640)
+                int(det.centre.x), int(det.centre.y), now_t)
+
+    # ── Workspace-relative path resolution ──────────────────────────────
+    def _resolve_workspace_csv_path(self, name: str) -> str:
+        """Find the ros2_ws root by walking up from this node's module dir.
+        Falls back to $HOME if the walk doesn't find 'src' next to it."""
+        # __file__ is .../ros2_ws/src/mini_r1_v1_round3/mini_r1_v1_round3/nodes/...
+        here = os.path.dirname(os.path.abspath(__file__))
+        cur = here
+        for _ in range(8):
+            parent = os.path.dirname(cur)
+            if os.path.isdir(os.path.join(parent, 'src')):
+                return os.path.join(parent, name)
+            cur = parent
+        return os.path.join(os.path.expanduser('~'), name)
+
+    # ── CSV + photo + tile-pair plumbing ────────────────────────────────
+    def _init_csv_log(self):
+        try:
+            # Append so we don't lose previous runs; write header only
+            # if the file didn't already exist.
+            write_header = not os.path.exists(self._csv_path)
+            self._csv_file = open(self._csv_path, 'a', newline='')
+            self._csv_writer = csv.writer(self._csv_file)
+            if write_header:
+                self._csv_writer.writerow([
+                    'sim_sec', 'wall_iso', 'event_type',
+                    'logical_id', 'raw_id',
+                    'tag_x', 'tag_y', 'tag_z', 'tag_yaw_deg',
+                    'bot_x', 'bot_y', 'bot_z', 'bot_yaw_deg',
+                ])
+                self._csv_file.flush()
+            self.get_logger().warn(f'[CSV] logging to {self._csv_path}')
+        except Exception as e:
+            self.get_logger().error(f'[CSV] open failed: {e}')
+
+    def _csv_log(self, event_type: str, logical_id=None, raw_id=None,
+                 tag_pos=None, tag_yaw_deg=None):
+        if self._csv_writer is None:
+            return
+        try:
+            sim_sec = float(self.get_clock().now().nanoseconds) * 1e-9
+            wall_iso = datetime.datetime.now().isoformat(timespec='seconds')
+            rx, ry = self._map_xy()
+            ryaw = self._map_yaw()
+            tx = ty = tz = tyw = ''
+            if tag_pos is not None:
+                tx, ty = tag_pos[0], tag_pos[1]
+                tz = tag_pos[2] if len(tag_pos) > 2 else ''
+                if tag_yaw_deg is not None:
+                    tyw = f'{tag_yaw_deg:.1f}'
+            self._csv_writer.writerow([
+                f'{sim_sec:.3f}', wall_iso, event_type,
+                logical_id if logical_id is not None else '',
+                raw_id if raw_id is not None else '',
+                tx if tx == '' else f'{tx:+.3f}',
+                ty if ty == '' else f'{ty:+.3f}',
+                tz if tz == '' else f'{tz:+.3f}',
+                tyw,
+                f'{rx:+.3f}', f'{ry:+.3f}', '0.000',
+                f'{math.degrees(ryaw):+.1f}',
+            ])
+            self._csv_file.flush()
+        except Exception as e:
+            self.get_logger().warn(f'[CSV] write failed: {e}')
+
+    def _on_camera_image(self, msg):
+        if self._cv_bridge is None:
+            return
+        try:
+            self._latest_frame_rgb = self._cv_bridge.imgmsg_to_cv2(
+                msg, desired_encoding='rgb8')
+        except Exception:
+            pass
+
+    def _save_photo(self, logical_id: int) -> str | None:
+        """Save current camera frame with a corner overlay. Returns path
+        or None if no frame available."""
+        img = self._latest_frame_rgb
+        if img is None:
+            self.get_logger().warn(
+                f'[PHOTO] no camera frame yet for tag {logical_id}')
+            return None
+        try:
+            sim_sec = float(self.get_clock().now().nanoseconds) * 1e-9
+            fname = f'tag{logical_id}_{sim_sec:.2f}.png'
+            fpath = os.path.join(self._photo_dir, fname)
+            bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR).copy()
+            overlay_txt = f'TAG {logical_id} @ {sim_sec:.2f}s'
+            cv2.rectangle(bgr, (5, 5), (270, 35), (0, 0, 0), -1)
+            cv2.putText(bgr, overlay_txt, (10, 28),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.imwrite(fpath, bgr)
+            self.get_logger().warn(f'[PHOTO] saved {fpath}')
+            return fpath
+        except Exception as e:
+            self.get_logger().warn(f'[PHOTO] save failed: {e}')
+            return None
+
+    def _log_tag_event(self, logical_id: int, tag_pos):
+        """Unified tag log step: save photo + append CSV row."""
+        self._save_photo(logical_id)
+        # tag yaw captured at detection time — we only have position
+        # in mission_manager, so skip the yaw_deg column here.
+        self._csv_log('tag', logical_id=logical_id,
+                      tag_pos=tag_pos)
+
+    def _on_tile_pairs(self, msg):
+        """Parse logo_detector's /logo/tile_pairs JSON into self._tile_pairs."""
+        try:
+            data = json.loads(msg.data)
+            if not isinstance(data, list):
+                return
+            pairs = []
+            for p in data:
+                g = p.get('green'); o = p.get('orange')
+                if g is None or o is None:
+                    continue
+                pairs.append({
+                    'green': (float(g[0]), float(g[1])),
+                    'orange': (float(o[0]), float(o[1])),
+                    'yaw_snapped': float(p.get('yaw_snapped', 0.0)),
+                })
+            # Also CSV-log any newly-observed tile centroids (once each).
+            for p in pairs:
+                self._maybe_log_tile(p)
+            self._tile_pairs = pairs
+        except Exception as e:
+            self.get_logger().warn(f'[TILES] bad tile_pairs JSON: {e}')
+
+    def _maybe_log_tile(self, pair: dict):
+        gx, gy = pair['green']
+        ox, oy = pair['orange']
+        cx, cy = (gx + ox) / 2.0, (gy + oy) / 2.0
+        key = (int(round(cx * 5.0)), int(round(cy * 5.0)))   # 20 cm
+        if key in self._logged_tile_keys:
+            return
+        self._logged_tile_keys.add(key)
+        self._csv_log('tile', tag_pos=(cx, cy, 0.0))
+
+    def _tile_key(self, x: float, y: float) -> tuple[int, int]:
+        return (int(round(x * 5.0)), int(round(y * 5.0)))   # 20 cm
+
+    def _pick_follow_target(self, color: str) -> tuple[float, float, float] | None:
+        """Choose the nearest non-consumed tile within 1.7 m and return
+        (wx, wy, yaw) for the waypoint — 0.3 m past the ORANGE centroid
+        when color=='orange', or 0.3 m past the GREEN centroid when
+        color=='green' (i.e. start of arrow + 0.3 m in reverse
+        direction)."""
+        if not self._tile_pairs:
+            return None
+        rx, ry = self._map_xy()
+        best = None
+        best_d = math.inf
+        for p in self._tile_pairs:
+            gx, gy = p['green']
+            ox, oy = p['orange']
+            cx, cy = (gx + ox) / 2.0, (gy + oy) / 2.0
+            key = self._tile_key(cx, cy)
+            if key in self._consumed_tile_keys:
+                continue
+            d = math.hypot(cx - rx, cy - ry)
+            if d > 1.7:
+                continue
+            if d < best_d:
+                best_d = d
+                best = (p, key)
+        if best is None:
+            return None
+        p, key = best
+        gx, gy = p['green']
+        ox, oy = p['orange']
+        yaw = p['yaw_snapped']
+        if color == 'orange':
+            # waypoint = orange + 0.3 m along (orange - green)
+            wx = ox + 0.30 * math.cos(yaw)
+            wy = oy + 0.30 * math.sin(yaw)
+        else:   # green — vice versa: 0.3 m past the green side
+            wx = gx - 0.30 * math.cos(yaw)
+            wy = gy - 0.30 * math.sin(yaw)
+        self._current_follow_tile_key = key
+        return (wx, wy, yaw)
 
     # ── Tag 1 and Tag 2 action entry points ──────────────────────────────
     def _enter_tag1_flow(self, tag_pos: tuple[float, float, float]):
         """Start the two-step Tag-1 action: goal A = (tx-0.5, ty, yaw=90°)."""
         tx, ty, _tz = tag_pos
         self._tag1_pos = (tx, ty)
+        self._log_tag_event(1, tag_pos)
         self._pause_exploration_for_action('TAG1')
         goal_a = (tx - 0.5, ty, math.radians(90.0))
         goal_b = (tx - 0.5, ty + 1.5, math.radians(90.0))
@@ -486,6 +753,7 @@ class MissionManagerNode(Node):
     def _enter_tag2_flow(self, tag_pos: tuple[float, float, float]):
         tx, ty, _tz = tag_pos
         self._tag2_pos = (tx, ty)
+        self._log_tag_event(2, tag_pos)
         self._pause_exploration_for_action('TAG2')
         goal = (tx, ty - 1.5, 0.0)
         self._action_poi[2] = [
@@ -1332,9 +1600,13 @@ class MissionManagerNode(Node):
         elif self.state == EXECUTE_TAG_TURN:
             self._tick_execute_tag_turn()
         elif self.state == FOLLOW_GREEN:
-            self._tick_follow_color('green')
+            self._tick_follow_tiles('green')
         elif self.state == FOLLOW_ORANGE:
-            self._tick_follow_color('orange')
+            self._tick_follow_tiles('orange')
+        elif self.state == TAG4_UTURN:
+            self._tick_tag4_uturn()
+        elif self.state == TAG5_APPROACH:
+            self._tick_tag5_approach()
         elif self.state == GOING_TO_STOP_ZONE:
             self._tick_going_to_stop_zone()
         elif self.state == HALTED:
@@ -1646,49 +1918,46 @@ class MissionManagerNode(Node):
 
     def _tick_looking_for_tag2(self):
         """Rotate in place until raw tag id 0 (= logical 2) is centred in
-        the image. Stop the rotation as soon as the pixel x-centre is
-        within TAG_CENTERED_PIXEL_TOL of the image centre."""
-        # Raw id 0 corresponds to logical tag 2 (see RAW_TO_LOGICAL_ID).
+        the image. Only trusts apriltag centroids seen within the last
+        LOOK_DETECTION_MAX_AGE_S seconds so stale dict entries can't
+        spoof the centering test."""
+        now = time.time()
+        if self._look_started_at == 0.0:
+            self._look_started_at = now
+            self.get_logger().warn(
+                f'[LOOK2] ENTER — rotating to centre tag 2 '
+                f'(buffered_pos={self._tag_positions_map.get(2)})')
+
+        img_center_px = 320  # 640-wide image
         det = self._last_raw_detection.get(0)
-        img_center_px = 320  # camera x-centre for 640-wide image
-        if det is not None:
-            px_u, _px_v, _ = det
-            # Stale guard: detection is only fresh if it was reported in
-            # the past second. If the detection dict is older, treat as
-            # if tag 2 not visible.
-            # (We don't currently stamp detections; rely on the raw
-            # subscription clearing only when new detections come in.)
-            if abs(px_u - img_center_px) < self.TAG_CENTERED_PIXEL_TOL:
-                self.cmd_pub.publish(Twist())
-                self.get_logger().warn(
-                    f'[LOOK2] tag 2 centred at u={px_u} (|Δ|='
-                    f'{abs(px_u - img_center_px)} px) — firing action.')
-                # Mark executed so the tag-command callback doesn't
-                # re-trigger it, then enter TAG2_GOAL.
-                self._executed_tag_ids.add(2)
-                pos = self._tag_positions_map.get(2)
-                if pos is None:
-                    self.get_logger().error(
-                        '[LOOK2] centred but no tag 2 position known!')
-                    self._transition(EXPLORING)
-                    return
-                self._tag2_pos = (pos[0], pos[1])
-                self._action_next_goal = (pos[0], pos[1] - 1.5, 0.0)
-                self._transition(TAG2_GOAL)
-                return
-            # Seen but off-centre: rotate toward it. Positive dx means
-            # tag is right of centre → rotate clockwise (negative omega).
-            dx = px_u - img_center_px
-            omega = -self.LOOK_ROTATE_OMEGA * (1.0 if dx > 0 else -1.0)
-            t = Twist()
-            t.angular.z = omega
-            self.cmd_pub.publish(t)
+        fresh = (det is not None
+                 and (now - det[2]) <= self.LOOK_DETECTION_MAX_AGE_S)
+
+        # Timeout escape: if we've been rotating this long without
+        # centring, just commit to the buffered position and fire.
+        if now - self._look_started_at > self.LOOK_TIMEOUT_S:
+            self.get_logger().warn(
+                f'[LOOK2] TIMEOUT after {self.LOOK_TIMEOUT_S:.0f}s — '
+                f'firing tag 2 action using buffered position')
+            self.cmd_pub.publish(Twist())
+            self._enter_tag2_from_buffered()
             return
 
-        # Tag 2 not in sight yet: rotate slowly CCW while searching. If
-        # we have a buffered tag 2 position, bias direction toward it.
+        if fresh:
+            # Per user: "as soon as it is detected, go to the waypoint
+            # without fail". No pixel-centering wait — ANY fresh raw-0
+            # detection fires the action immediately.
+            px_u = det[0]
+            self.cmd_pub.publish(Twist())
+            self.get_logger().warn(
+                f'[LOOK2] DETECTED at u={px_u} age={now-det[2]:.2f}s '
+                f'— firing tag 2 action immediately')
+            self._enter_tag2_from_buffered()
+            return
+
+        # No fresh detection. Rotate in the direction of the buffered
+        # tag-2 position (in map frame) so we search the right way.
         t = Twist()
-        t.angular.z = self.LOOK_ROTATE_OMEGA
         pos = self._tag_positions_map.get(2)
         if pos is not None:
             rx, ry = self._map_xy()
@@ -1697,7 +1966,35 @@ class MissionManagerNode(Node):
                 math.sin(target_yaw - self.robot_yaw),
                 math.cos(target_yaw - self.robot_yaw))
             t.angular.z = self.LOOK_ROTATE_OMEGA * (1.0 if yaw_err >= 0 else -1.0)
+            self.get_logger().info(
+                f'[LOOK2] searching: target_yaw={math.degrees(target_yaw):+.0f}° '
+                f'err={math.degrees(yaw_err):+.0f}° ω={t.angular.z:+.2f}',
+                throttle_duration_sec=1.0)
+        else:
+            t.angular.z = self.LOOK_ROTATE_OMEGA
+            self.get_logger().info(
+                '[LOOK2] no buffered position — default CCW sweep',
+                throttle_duration_sec=2.0)
         self.cmd_pub.publish(t)
+
+    def _enter_tag2_from_buffered(self):
+        """Shared exit path from LOOKING_FOR_TAG2 into TAG2_GOAL.
+        Uses the stored _tag_positions_map[2] (captured the moment tag 2
+        was first sighted, well before LOOK2 started)."""
+        self._executed_tag_ids.add(2)
+        pos = self._tag_positions_map.get(2)
+        if pos is None:
+            self.get_logger().error(
+                '[LOOK2] no tag 2 position available at exit — back to EXPLORING')
+            self._look_started_at = 0.0
+            self._transition(EXPLORING)
+            return
+        self._tag2_pos = (pos[0], pos[1])
+        self._action_next_goal = (pos[0], pos[1] - 1.5, 0.0)
+        self.get_logger().warn(
+            f'[TAG2] action queued: goal=({pos[0]:+.2f},{pos[1] - 1.5:+.2f}, yaw=0°)')
+        self._look_started_at = 0.0
+        self._transition(TAG2_GOAL)
 
     def _tick_tag2_goal(self):
         if not self._nav_goal_active and self._action_next_goal is not None:
@@ -1712,10 +2009,133 @@ class MissionManagerNode(Node):
                     self._action_next_goal = (tx, ty - 1.5, 0.0)
                 self._nav_last_reached = False
                 return
-            self.get_logger().warn(
-                '[TAG2] reached — tag-1/2 demo sequence done, resuming EXPLORING.')
+            self.get_logger().warn('[TAG2] reached — logging + resuming EXPLORING.')
+            if self._tag2_pos is not None:
+                self._log_tag_event(2, (self._tag2_pos[0], self._tag2_pos[1], 0.0))
             self._nav_last_reached = False
             self._transition(EXPLORING)
+
+    # ── Tag 3/4/5 entry points ──────────────────────────────────────────
+    def _enter_follow_flow(self, color: str, tag_pos):
+        """Start follow-green (color='green') or follow-orange
+        ('orange'). The follow logic picks a tile pair each cycle
+        until no more unused tiles remain within 1.7 m, then falls
+        back to EXPLORING."""
+        self._pause_exploration_for_action(f'FOLLOW_{color.upper()}')
+        self._follow_active_color = color
+        target_state = FOLLOW_GREEN if color == 'green' else FOLLOW_ORANGE
+        self.get_logger().warn(
+            f'[FOLLOW] color={color} (tag fired at '
+            f'{tag_pos[0]:+.2f},{tag_pos[1]:+.2f})')
+        self._transition(target_state)
+
+    def _enter_tag4_uturn(self, tag_pos):
+        """Tag 4: stop following + 180° rotate in place."""
+        self._follow_active_color = None
+        self._current_follow_tile_key = None
+        self._pause_exploration_for_action('TAG4_UTURN')
+        self._tag4_start_yaw = self._map_yaw()
+        self._tag4_target_yaw = math.atan2(
+            math.sin(self._tag4_start_yaw + math.pi),
+            math.cos(self._tag4_start_yaw + math.pi))
+        self.get_logger().warn(
+            f'[TAG4] U-turn: {math.degrees(self._tag4_start_yaw):+.0f}° '
+            f'→ {math.degrees(self._tag4_target_yaw):+.0f}°')
+        self._transition(TAG4_UTURN)
+
+    def _enter_tag5_approach(self, tag_pos):
+        """Tag 5: approach to within 0.5 m along bot→tag line, then
+        transition to FOLLOW_ORANGE."""
+        tx, ty = tag_pos[0], tag_pos[1]
+        self._tag5_pos = (tx, ty)
+        rx, ry = self._map_xy()
+        dx, dy = tx - rx, ty - ry
+        d = math.hypot(dx, dy)
+        if d < 1e-3:
+            gx, gy = rx, ry
+        else:
+            # Stop 0.5 m before the tag along the bot→tag line.
+            ux, uy = dx / d, dy / d
+            stop_d = max(0.0, d - 0.5)
+            gx = rx + ux * stop_d
+            gy = ry + uy * stop_d
+        yaw = math.atan2(ty - gy, tx - gx)  # face the tag
+        self._pause_exploration_for_action('TAG5_APPROACH')
+        self._action_next_goal = (gx, gy, yaw)
+        self.get_logger().warn(
+            f'[TAG5] approach: ({gx:+.2f},{gy:+.2f},yaw={math.degrees(yaw):+.0f}°)')
+        self._transition(TAG5_APPROACH)
+
+    # ── Tag 3/4/5 tick handlers ─────────────────────────────────────────
+    def _tick_follow_tiles(self, color: str):
+        """Drive from one tile waypoint to the next. Picks the nearest
+        unused tile pair within 1.7 m; when it's reached, mark consumed
+        and pick another. No more tiles → back to EXPLORING."""
+        if not self._nav_goal_active:
+            cand = self._pick_follow_target(color)
+            if cand is None:
+                self.get_logger().info(
+                    f'[FOLLOW] no unused {color} tiles within 1.7 m — '
+                    f'resuming EXPLORING')
+                self._follow_active_color = None
+                self._transition(EXPLORING)
+                return
+            wx, wy, yaw = cand
+            self.get_logger().warn(
+                f'[FOLLOW] {color} → waypoint=({wx:+.2f},{wy:+.2f},'
+                f'yaw={math.degrees(yaw):+.0f}°)')
+            self._send_goal(wx, wy, yaw)
+            return
+        if self._mpc_is_complete():
+            if self._nav_last_reached and self._current_follow_tile_key is not None:
+                self._consumed_tile_keys.add(self._current_follow_tile_key)
+                rx, ry = self._map_xy()
+                # CSV log: tile crossed during follow flow.
+                self._csv_log(
+                    f'tile_crossed_{color}',
+                    tag_pos=(rx, ry, 0.0))
+                self.get_logger().warn(
+                    f'[FOLLOW] consumed tile {self._current_follow_tile_key} '
+                    f'(total consumed={len(self._consumed_tile_keys)})')
+            self._current_follow_tile_key = None
+            self._nav_last_reached = False
+
+    def _tick_tag4_uturn(self):
+        """Pure rotation in place to the target yaw. Publishes direct
+        cmd_vel (Nav2 can't do zero-translation rotations cleanly here)."""
+        yaw = self._map_yaw()
+        err = math.atan2(
+            math.sin(self._tag4_target_yaw - yaw),
+            math.cos(self._tag4_target_yaw - yaw))
+        if abs(err) < math.radians(8):
+            self.cmd_pub.publish(Twist())
+            self.get_logger().warn('[TAG4] U-turn complete — EXPLORING')
+            self._transition(EXPLORING)
+            return
+        t = Twist()
+        t.angular.z = 1.6 * (1.0 if err > 0 else -1.0)
+        self.cmd_pub.publish(t)
+
+    def _tick_tag5_approach(self):
+        """Drive to the pre-computed 0.5-m-from-tag5 waypoint; on
+        arrival, transition to FOLLOW_ORANGE."""
+        if not self._nav_goal_active and self._action_next_goal is not None:
+            self._dispatch_pending_action_goal()
+            return
+        if self._mpc_is_complete():
+            if not self._nav_last_reached:
+                self.get_logger().warn(
+                    '[TAG5] approach goal ended without reach — retrying.')
+                self._nav_last_reached = False
+                if self._tag5_pos is not None:
+                    self._enter_tag5_approach((self._tag5_pos[0],
+                                               self._tag5_pos[1], 0.0))
+                return
+            self.get_logger().warn(
+                '[TAG5] within 0.5 m — starting FOLLOW_ORANGE')
+            self._nav_last_reached = False
+            self._follow_active_color = 'orange'
+            self._transition(FOLLOW_ORANGE)
 
 
 def main(args=None):
